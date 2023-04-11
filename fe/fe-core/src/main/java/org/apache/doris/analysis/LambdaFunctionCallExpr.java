@@ -35,12 +35,12 @@ import java.util.List;
 public class LambdaFunctionCallExpr extends FunctionCallExpr {
     public static final ImmutableSet<String> LAMBDA_FUNCTION_SET = new ImmutableSortedSet.Builder(
             String.CASE_INSENSITIVE_ORDER).add("array_map").add("array_filter").add("array_exists").add("array_sortby")
-            .add("array_first_index").build();
+            .add("array_first_index").add("array_split").add("array_revert_split").build();
     // The functions in this set are all normal array functions when implemented initially.
     // and then wants add lambda expr as the input param, so we rewrite it to contains an array_map lambda function
     // rather than reimplementing a lambda function, this will be reused the implementation of normal array function
     public static final ImmutableSet<String> LAMBDA_MAPPED_FUNCTION_SET = new ImmutableSortedSet.Builder(
-            String.CASE_INSENSITIVE_ORDER).add("array_exists").add("array_sortby").add("array_first_index").build();
+            String.CASE_INSENSITIVE_ORDER).add("array_exists").add("array_sortby").add("array_first_index").add("array_split").add("array_revert_split").build();
 
     private static final Logger LOG = LogManager.getLogger(LambdaFunctionCallExpr.class);
 
@@ -197,6 +197,36 @@ public class LambdaFunctionCallExpr extends FunctionCallExpr {
                 argTypes[0] = getChild(0).getType();
                 argTypes[1] = getChild(1).getType();
             }
+            fn = getBuiltinFunction(fnName.getFunction(), argTypes,
+                    Function.CompareMode.IS_NONSTRICT_SUPERTYPE_OF);
+            if (fn == null) {
+                LOG.warn("fn {} not exists", this.toSqlImpl());
+                throw new AnalysisException(getFunctionNotFoundError(collectChildReturnTypes()));
+            }
+            fn.setReturnType(getChild(0).getType());
+        } else if (fnName.getFunction().equalsIgnoreCase("array_split")) {
+            if (fnParams.exprs() == null || fnParams.exprs().size() != 3) {
+                throw new AnalysisException("The " + fnName.getFunction() + " function must have three params");
+            }
+
+            if (getChild(1) instanceof LambdaFunctionExpr) {
+                List<Expr> params = new ArrayList<>();
+                params.add(getChild(1));
+                params.add(getChild(0));
+                params.add(getChild(2));
+                LambdaFunctionCallExpr arraySplitFunc = new LambdaFunctionCallExpr("array_map",
+                        params);
+                arraySplitFunc.analyzeImpl(analyzer);
+                Expr castExpr = arraySplitFunc.castTo(ArrayType.create(Type.BOOLEAN, true));
+                this.setChild(1, castExpr);
+                argTypes[1] = castExpr.getType();
+            }
+            if (!(getChild(1) instanceof CastExpr)) {
+                Expr castExpr = getChild(1).castTo(ArrayType.create(Type.BOOLEAN, true));
+                this.setChild(1, castExpr);
+                argTypes[1] = castExpr.getType();
+            }
+
             fn = getBuiltinFunction(fnName.getFunction(), argTypes,
                     Function.CompareMode.IS_NONSTRICT_SUPERTYPE_OF);
             if (fn == null) {
