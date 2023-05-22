@@ -125,6 +125,7 @@ public class OdbcTable extends Table {
         switch (tableType) {
             case MYSQL:
             case OCEANBASE:
+            case TDENGINE:
                 return formatName(name, "`", "`", false, false);
             case SQLSERVER:
                 return formatName(name, "[", "]", false, false);

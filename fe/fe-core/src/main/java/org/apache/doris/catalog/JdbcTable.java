@@ -70,7 +70,6 @@ public class JdbcTable extends Table {
 
     static {
         Map<String, TOdbcTableType> tempMap = new CaseInsensitiveMap();
-        tempMap.put("nebula", TOdbcTableType.NEBULA);
         tempMap.put("mysql", TOdbcTableType.MYSQL);
         tempMap.put("postgresql", TOdbcTableType.POSTGRESQL);
         tempMap.put("sqlserver", TOdbcTableType.SQLSERVER);
@@ -81,6 +80,8 @@ public class JdbcTable extends Table {
         tempMap.put("presto", TOdbcTableType.PRESTO);
         tempMap.put("oceanbase", TOdbcTableType.OCEANBASE);
         tempMap.put("oceanbase_oracle", TOdbcTableType.OCEANBASE_ORACLE);
+        tempMap.put("nebula", TOdbcTableType.NEBULA);
+        tempMap.put("tdengine", TOdbcTableType.TDENGINE);
         TABLE_TYPE_MAP = Collections.unmodifiableMap(tempMap);
     }
 

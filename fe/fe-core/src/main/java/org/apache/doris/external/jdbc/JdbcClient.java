@@ -196,6 +196,7 @@ public class JdbcClient {
                 case JdbcResource.MYSQL:
                 case JdbcResource.CLICKHOUSE:
                 case JdbcResource.OCEANBASE:
+                case JdbcResource.TDENGINE:
                     rs = stmt.executeQuery("SHOW DATABASES");
                     break;
                 case JdbcResource.POSTGRESQL:
@@ -251,6 +252,7 @@ public class JdbcClient {
             switch (dbType) {
                 case JdbcResource.MYSQL:
                 case JdbcResource.OCEANBASE:
+                case JdbcResource.TDENGINE:
                     databaseNames.add(conn.getCatalog());
                     break;
                 case JdbcResource.CLICKHOUSE:
@@ -289,6 +291,7 @@ public class JdbcClient {
             switch (dbType) {
                 case JdbcResource.MYSQL:
                 case JdbcResource.OCEANBASE:
+                case JdbcResource.TDENGINE:
                     rs = databaseMetaData.getTables(dbName, null, null, types);
                     break;
                 case JdbcResource.POSTGRESQL:
@@ -335,6 +338,7 @@ public class JdbcClient {
             switch (dbType) {
                 case JdbcResource.MYSQL:
                 case JdbcResource.OCEANBASE:
+                case JdbcResource.TDENGINE:
                     rs = databaseMetaData.getTables(dbName, null, tableName, types);
                     break;
                 case JdbcResource.POSTGRESQL:
@@ -417,6 +421,7 @@ public class JdbcClient {
             switch (dbType) {
                 case JdbcResource.MYSQL:
                 case JdbcResource.OCEANBASE:
+                case JdbcResource.TDENGINE:
                     rs = databaseMetaData.getColumns(dbName, null, tableName, null);
                     break;
                 case JdbcResource.POSTGRESQL:
@@ -495,6 +500,8 @@ public class JdbcClient {
             case JdbcResource.TRINO:
             case JdbcResource.PRESTO:
                 return trinoTypeToDoris(fieldSchema);
+            case JdbcResource.TDENGINE:
+                return tdengineTypeToDoris(fieldSchema);
             default:
                 throw new JdbcClientException("Unknown database type");
         }
@@ -948,6 +955,40 @@ public class JdbcClient {
                 return Type.BOOLEAN;
             case "date":
                 return ScalarType.createDateV2Type();
+            default:
+                return Type.UNSUPPORTED;
+        }
+    }
+
+    public Type tdengineTypeToDoris(JdbcFieldSchema fieldSchema) {
+        String tdengineType = fieldSchema.getDataTypeName();
+        switch (tdengineType) {
+            case "TIMESTAMP":
+                return ScalarType.createDatetimeV2Type(6);
+            case "TINYINT":
+                return Type.TINYINT;
+            case "TINYINT UNSIGNED":
+            case "SMALLINT":
+                return Type.SMALLINT;
+            case "SMALLINT UNSIGNED":
+            case "INT":
+                return Type.INT;
+            case "INT UNSIGNED":
+            case "BIGINT":
+                return Type.BIGINT;
+            case "BIGINT UNSIGNED":
+                return Type.LARGEINT;
+            case "FLOAT":
+                return Type.FLOAT;
+            case "DOUBLE":
+                return Type.DOUBLE;
+            case "BOOL":
+                return Type.BOOLEAN;
+            case "NCHAR":
+            case "VARCHAR":
+                return ScalarType.createVarcharType(fieldSchema.columnSize);
+            case "JSON":
+                return ScalarType.createStringType();
             default:
                 return Type.UNSUPPORTED;
         }
