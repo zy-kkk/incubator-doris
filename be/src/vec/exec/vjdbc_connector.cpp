@@ -566,8 +566,6 @@ jobject JdbcConnector::_get_reader_params(Block* block, JNIEnv* env, size_t colu
                 replace_type = "bitmap";
             } else if (type.is_hll_type()) {
                 replace_type = "hll";
-            } else if (type.is_json_type()) {
-                replace_type = "jsonb";
             }
             columns_replace_string << replace_type << ",";
             if (replace_type != "not_replace") {
@@ -585,8 +583,7 @@ jobject JdbcConnector::_get_reader_params(Block* block, JNIEnv* env, size_t colu
         // Record required fields and column types
         std::string field = slot->col_name();
         std::string jni_type;
-        if (slot->type().is_bitmap_type() || slot->type().is_hll_type() ||
-            slot->type().is_json_type()) {
+        if (slot->type().is_bitmap_type() || slot->type().is_hll_type()) {
             jni_type = "string";
         } else {
             jni_type = JniConnector::get_jni_type(slot->type());
@@ -616,8 +613,6 @@ Status JdbcConnector::_cast_string_to_special(Block* block, JNIEnv* env, size_t 
 
         if (slot_desc->type().is_hll_type()) {
             static_cast<void>(_cast_string_to_hll(slot_desc, block, column_index, num_rows));
-        } else if (slot_desc->type().is_json_type()) {
-            static_cast<void>(_cast_string_to_json(slot_desc, block, column_index, num_rows));
         } else if (slot_desc->type().is_bitmap_type()) {
             static_cast<void>(_cast_string_to_bitmap(slot_desc, block, column_index, num_rows));
         }
@@ -698,42 +693,4 @@ Status JdbcConnector::_cast_string_to_bitmap(const SlotDescriptor* slot_desc, Bl
 
     return Status::OK();
 }
-
-Status JdbcConnector::_cast_string_to_json(const SlotDescriptor* slot_desc, Block* block,
-                                           int column_index, int rows) {
-    DataTypePtr _target_data_type = slot_desc->get_data_type_ptr();
-    std::string _target_data_type_name = _target_data_type->get_name();
-    DataTypePtr _cast_param_data_type = _target_data_type;
-    ColumnPtr _cast_param = _cast_param_data_type->create_column_const(1, "{}");
-
-    auto& input_col = block->get_by_position(column_index).column;
-
-    ColumnsWithTypeAndName argument_template;
-    argument_template.reserve(2);
-    argument_template.emplace_back(
-            std::move(input_col),
-            _input_json_string_types[_map_column_idx_to_cast_idx_json[column_index]],
-            "java.sql.String");
-    argument_template.emplace_back(_cast_param, _cast_param_data_type, _target_data_type_name);
-    FunctionBasePtr func_cast = SimpleFunctionFactory::instance().get_function(
-            "CAST", argument_template, make_nullable(_target_data_type));
-
-    Block cast_block(argument_template);
-    int result_idx = cast_block.columns();
-    cast_block.insert({nullptr, make_nullable(_target_data_type), "cast_result"});
-    static_cast<void>(func_cast->execute(nullptr, cast_block, {0, 1}, result_idx, rows));
-
-    auto res_col = cast_block.get_by_position(result_idx).column;
-    block->get_by_position(column_index).type = _target_data_type;
-    if (_target_data_type->is_nullable()) {
-        block->replace_by_position(column_index, res_col);
-    } else {
-        auto nested_ptr = reinterpret_cast<const vectorized::ColumnNullable*>(res_col.get())
-                                  ->get_nested_column_ptr();
-        block->replace_by_position(column_index, nested_ptr);
-    }
-
-    return Status::OK();
-}
-
 } // namespace doris::vectorized

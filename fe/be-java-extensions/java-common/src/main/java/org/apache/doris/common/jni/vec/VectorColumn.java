@@ -365,6 +365,7 @@ public class VectorColumn {
             case VARCHAR:
             case STRING:
             case BINARY:
+            case JSONB:
                 return appendBytesAndOffset(new byte[0]);
             case ARRAY:
                 return appendArray(Collections.emptyList());
@@ -1085,6 +1086,11 @@ public class VectorColumn {
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
+    public byte[][] getBinaryWithOffset(int rowId) {
+        byte[] bytes = getBytesWithOffset(rowId);
+        return new byte[][]{bytes};
+    }
+
     public String[] getStringColumn(int start, int end) {
         String[] result = new String[end - start];
         for (int i = start; i < end; ++i) {
@@ -1350,6 +1356,7 @@ public class VectorColumn {
             case CHAR:
             case VARCHAR:
             case STRING:
+            case JSONB:
                 return new String[size];
             case ARRAY:
                 return new ArrayList[size];
@@ -1404,6 +1411,7 @@ public class VectorColumn {
             case CHAR:
             case VARCHAR:
             case STRING:
+            case JSONB:
                 if (batch instanceof String[]) {
                     appendStringAndOffset((String[]) batch, isNullable);
                 } else {
@@ -1456,6 +1464,7 @@ public class VectorColumn {
             case CHAR:
             case VARCHAR:
             case STRING:
+            case JSONB:
                 return getStringColumn(start, end);
             case ARRAY:
                 return getArrayColumn(start, end);
@@ -1517,6 +1526,7 @@ public class VectorColumn {
             case CHAR:
             case VARCHAR:
             case STRING:
+            case JSONB:
                 if (o.canGetStringAsBytes()) {
                     appendBytesAndOffset(o.getStringAsBytes());
                 } else {
@@ -1601,6 +1611,7 @@ public class VectorColumn {
             case VARCHAR:
             case STRING:
             case BINARY:
+            case JSONB:
                 sb.append(getStringWithOffset(i));
                 break;
             case ARRAY: {

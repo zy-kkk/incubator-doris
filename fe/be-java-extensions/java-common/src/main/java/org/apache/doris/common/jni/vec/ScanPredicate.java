@@ -110,6 +110,7 @@ public class ScanPredicate {
                 case CHAR:
                 case VARCHAR:
                 case STRING:
+                case JSONB:
                     return new String(valueBytes, StandardCharsets.UTF_8);
                 case BINARY:
                     return valueBytes;

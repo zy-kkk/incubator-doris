@@ -322,7 +322,8 @@ private:
 
     static Status _fill_string_column(TableMetaAddress& address, MutableColumnPtr& doris_column,
                                       size_t num_rows);
-
+    static Status _fill_jsonb_column(TableMetaAddress& address, MutableColumnPtr& doris_column,
+                                     size_t num_rows);
     static Status _fill_map_column(TableMetaAddress& address, MutableColumnPtr& doris_column,
                                    DataTypePtr& data_type, size_t num_rows);
 

@@ -57,6 +57,7 @@ public class ColumnType {
         DECIMAL64(8),
         DECIMAL128(16),
         STRING(-1),
+        JSONB(-1),
         ARRAY(-1),
         MAP(-1),
         STRUCT(-1);
@@ -144,7 +145,8 @@ public class ColumnType {
     }
 
     public boolean isStringType() {
-        return type == Type.STRING || type == Type.BINARY || type == Type.CHAR || type == Type.VARCHAR;
+        return type == Type.STRING || type == Type.BINARY || type == Type.CHAR || type == Type.VARCHAR
+                || type == Type.JSONB;
     }
 
     public boolean isComplexType() {
@@ -218,6 +220,7 @@ public class ColumnType {
             case BINARY:
             case CHAR:
             case VARCHAR:
+            case JSONB:
                 // [nullMap | offsets | data ]
                 return 3;
             default:
@@ -295,6 +298,9 @@ public class ColumnType {
                 break;
             case "string":
                 type = Type.STRING;
+                break;
+            case "jsonb":
+                type = Type.JSONB;
                 break;
             default:
                 if (lowerCaseType.startsWith("timestamp")

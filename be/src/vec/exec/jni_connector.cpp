@@ -24,6 +24,7 @@
 
 #include "jni.h"
 #include "runtime/decimalv2_value.h"
+#include "runtime/jsonb_value.h"
 #include "runtime/runtime_state.h"
 #include "util/jni-util.h"
 #include "vec/columns/column_array.h"
@@ -43,7 +44,6 @@ class RuntimeProfile;
 } // namespace doris
 
 namespace doris::vectorized {
-
 #define FOR_FIXED_LENGTH_TYPES(M)                                     \
     M(TypeIndex::Int8, ColumnVector<Int8>, Int8)                      \
     M(TypeIndex::UInt8, ColumnVector<UInt8>, UInt8)                   \
@@ -333,6 +333,8 @@ Status JniConnector::_fill_column(TableMetaAddress& address, ColumnPtr& doris_co
         [[fallthrough]];
     case TypeIndex::FixedString:
         return _fill_string_column(address, data_column, num_rows);
+    case TypeIndex::JSONB:
+        return _fill_jsonb_column(address, data_column, num_rows);
     case TypeIndex::Array:
         return _fill_array_column(address, data_column, data_type, num_rows);
     case TypeIndex::Map:
@@ -367,6 +369,34 @@ Status JniConnector::_fill_string_column(TableMetaAddress& address, MutableColum
     string_offsets.resize(origin_offsets_size + num_rows);
     for (size_t i = 0; i < num_rows; ++i) {
         string_offsets[origin_offsets_size + i] = offsets[i] + start_offset;
+    }
+    return Status::OK();
+}
+
+Status JniConnector::_fill_jsonb_column(TableMetaAddress& address, MutableColumnPtr& doris_column,
+                                        size_t num_rows) {
+    if (num_rows == 0) {
+        return Status::OK();
+    }
+    auto& json_column = static_cast<ColumnString&>(*doris_column);
+    const auto offsets = static_cast<int*>(address.next_meta_as_ptr());
+    auto json_data_ptr = static_cast<char*>(address.next_meta_as_ptr());
+
+    int previous_offset = 0;
+    for (size_t row = 0; row < num_rows; ++row) {
+        const int current_offset = offsets[row];
+        const int data_length = current_offset - previous_offset;
+
+        if (data_length == 0) {
+            json_column.insert_data(nullptr, 0);
+        } else {
+            JsonBinaryValue json_value;
+            RETURN_IF_ERROR(json_value.from_json_string(json_data_ptr, data_length));
+            json_column.insert_data(json_value.value(), json_value.size());
+        }
+
+        json_data_ptr += data_length;
+        previous_offset = current_offset;
     }
     return Status::OK();
 }
@@ -470,6 +500,8 @@ std::string JniConnector::get_jni_type(const DataTypePtr& data_type) {
         [[fallthrough]];
     case TYPE_STRING:
         return "string";
+    case TYPE_JSONB:
+        return "jsonb";
     case TYPE_DATE:
         return "datev1";
     case TYPE_DATEV2:
@@ -574,6 +606,8 @@ std::string JniConnector::get_jni_type(const TypeDescriptor& desc) {
     }
     case TYPE_STRING:
         return "string";
+    case TYPE_JSONB:
+        return "jsonb";
     case TYPE_DECIMALV2: {
         buffer << "decimalv2(" << DecimalV2Value::PRECISION << "," << DecimalV2Value::SCALE << ")";
         return buffer.str();
@@ -639,6 +673,8 @@ Status JniConnector::_fill_column_meta(ColumnPtr& doris_column, DataTypePtr& dat
         FOR_FIXED_LENGTH_TYPES(DISPATCH)
 #undef DISPATCH
     case TypeIndex::String:
+        [[fallthrough]];
+    case TypeIndex::JSONB:
         [[fallthrough]];
     case TypeIndex::FixedString: {
         auto& string_column = static_cast<ColumnString&>(*data_column);
@@ -754,5 +790,4 @@ std::pair<std::string, std::string> JniConnector::parse_table_schema(Block* bloc
     }
     return parse_table_schema(block, arguments, true);
 }
-
 } // namespace doris::vectorized

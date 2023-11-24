@@ -35,10 +35,10 @@ public class JniScannerTest {
             {
                 put("mock_rows", "128");
                 put("required_fields", "boolean,tinyint,smallint,int,bigint,largeint,float,double,"
-                        + "date,timestamp,char,varchar,string,decimalv2,decimal64,array,map,struct,"
+                        + "date,timestamp,char,varchar,string,jsonb,decimalv2,decimal64,array,map,struct,"
                         + "decimal18,timestamp4,datev1,datev2,datetimev1,datetimev2");
                 put("columns_types", "boolean#tinyint#smallint#int#bigint#largeint#float#double#"
-                        + "date#timestamp#char(10)#varchar(10)#string#decimalv2(12,4)#decimal64(10,3)#"
+                        + "date#timestamp#char(10)#varchar(10)#string#jsonb#decimalv2(12,4)#decimal64(10,3)#"
                         + "array<array<string>>#map<string,array<int>>#struct<col1:timestamp(6),col2:array<char(10)>>#"
                         + "decimal(18,5)#timestamp(4)#datev1#datev2#datetimev1#datetimev2(4)");
             }

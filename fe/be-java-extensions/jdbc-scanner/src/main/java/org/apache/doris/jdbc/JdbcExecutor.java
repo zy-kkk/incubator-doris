@@ -187,17 +187,19 @@ public class JdbcExecutor {
             curBlockRows = 0;
             int columnCount = resultSetMetaData.getColumnCount();
 
+            outputTable = VectorTable.createWritableTable(outputParams, 0);
+
             do {
                 for (int i = 0; i < columnCount; ++i) {
+                    ColumnType type = outputTable.getColumnType(i);
                     boolean isBitmapOrHll =
                             replaceStringList[i].equals("bitmap")
                                     || replaceStringList[i].equals("hll");
-                    block.get(i)[curBlockRows] = getColumnValue(tableType, i, isBitmapOrHll);
+                    block.get(i)[curBlockRows] = getColumnValue(tableType, i, type, isBitmapOrHll);
                 }
                 curBlockRows++;
             } while (curBlockRows < batchSize && resultSet.next());
 
-            outputTable = VectorTable.createWritableTable(outputParams, curBlockRows);
 
             for (int i = 0; i < columnCount; ++i) {
                 Object[] columnData = block.get(i);
@@ -375,7 +377,7 @@ public class JdbcExecutor {
         return Object.class;
     }
 
-    public Object getColumnValue(TOdbcTableType tableType, int columnIndex, boolean isBitmapOrHll)
+    public Object getColumnValue(TOdbcTableType tableType, int columnIndex, ColumnType type, boolean isBitmapOrHll)
             throws SQLException {
         Object result;
         if (tableType == TOdbcTableType.NEBULA) {
@@ -590,6 +592,7 @@ public class JdbcExecutor {
                         input -> trimSpaces(tableType, input.toString()), String.class);
             case VARCHAR:
             case STRING:
+            case JSONB:
                 if (byte[].class.equals(clz)) {
                     if (replaceString.equals("bitmap") || replaceString.equals("hll")) {
                         break;
