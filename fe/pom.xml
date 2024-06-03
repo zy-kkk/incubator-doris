@@ -220,6 +220,7 @@ under the License.
         <module>fe-core</module>
         <module>hive-udf</module>
         <module>be-java-extensions</module>
+        <module>doris-connector</module>
     </modules>
     <properties>
         <!--suppress UnresolvedMavenProperty -->
@@ -1711,6 +1712,11 @@ under the License.
                 <groupId>io.airlift</groupId>
                 <artifactId>concurrent</artifactId>
                 <version>${airlift.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.doris</groupId>
+                <artifactId>connector-common</artifactId>
+                <version>${revision}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
