@@ -181,11 +181,11 @@ public abstract class BaseJdbcExecutor implements JdbcExecutor {
 
     public long getBlockAddress(int batchSize, Map<String, String> outputParams) throws UdfRuntimeException {
         try {
-            if (outputTable != null) {
-                outputTable.close();
+            if (outputTable == null) {
+                outputTable = VectorTable.createWritableTable(outputParams, 0);
+            } else {
+                outputTable.reset();
             }
-
-            outputTable = VectorTable.createWritableTable(outputParams, 0);
 
             String isNullableString = outputParams.get("is_nullable");
             String replaceString = outputParams.get("replace_string");
@@ -212,12 +212,16 @@ public abstract class BaseJdbcExecutor implements JdbcExecutor {
 
             for (int i = 0; i < columnCount; ++i) {
                 ColumnType type = outputTable.getColumnType(i);
-                Object[] columnData = block.get(i);
-                Class<?> componentType = columnData.getClass().getComponentType();
-                Object[] newColumn = (Object[]) Array.newInstance(componentType, curBlockRows);
-                System.arraycopy(columnData, 0, newColumn, 0, curBlockRows);
                 boolean isNullable = Boolean.parseBoolean(nullableList[i]);
-                outputTable.appendData(i, newColumn, getOutputConverter(type, replaceStringList[i]), isNullable);
+                if (curBlockRows == batchSize) {
+                    outputTable.appendData(i, block.get(i), getOutputConverter(type, replaceStringList[i]), isNullable);
+                } else {
+                    Object[] columnData = block.get(i);
+                    Class<?> componentType = columnData.getClass().getComponentType();
+                    Object[] newColumn = (Object[]) Array.newInstance(componentType, curBlockRows);
+                    System.arraycopy(columnData, 0, newColumn, 0, curBlockRows);
+                    outputTable.appendData(i, newColumn, getOutputConverter(type, replaceStringList[i]), isNullable);
+                }
             }
         } catch (Exception e) {
             LOG.warn("jdbc get block address exception: ", e);
