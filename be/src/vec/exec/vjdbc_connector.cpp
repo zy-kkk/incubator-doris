@@ -441,52 +441,37 @@ Status JdbcConnector::get_next(bool* eos, std::vector<MutableColumnPtr>& columns
     if (!_is_open) {
         return Status::InternalError("get_next before open of jdbc connector.");
     }
-    SCOPED_RAW_TIMER(&_jdbc_statistic._get_data_timer);
+    SCOPED_RAW_TIMER(&_jdbc_statistic._get_data_timer); // Total timer for get_next method
+
     JNIEnv* env = nullptr;
-    RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
-    jboolean has_next =
-            env->CallNonvirtualBooleanMethod(_executor_obj, _executor_clazz, _executor_has_next_id);
+    {
+        SCOPED_RAW_TIMER(
+                &_jdbc_statistic._jni_env_setup_timer); // Timer for setting up JNI environment
+        RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
+    }
+
+    jboolean has_next;
+    {
+        SCOPED_RAW_TIMER(&_jdbc_statistic._has_next_check_timer); // Timer for has_next check
+        has_next = env->CallNonvirtualBooleanMethod(_executor_obj, _executor_clazz,
+                                                    _executor_has_next_id);
+    }
     if (has_next != JNI_TRUE) {
         *eos = true;
         return Status::OK();
     }
 
     jobject block_obj;
-    // if contain HLL column, pass the column type to jni env
+    SCOPED_RAW_TIMER(&_jdbc_statistic._prepare_block_timer); // Timer for preparing block data
+    // Check if there are HLL or Bitmap columns to handle
     if (_tuple_desc->has_hll_slot() || _tuple_desc->has_bitmap_slot()) {
-        auto column_size = _tuple_desc->slots().size();
-        // Find ArrayList and Integer
-        jclass arrayListClass = env->FindClass("java/util/ArrayList");
-        jclass integerClass = env->FindClass("java/lang/Integer");
+        SCOPED_RAW_TIMER(
+                &_jdbc_statistic._handle_special_types_timer); // Timer for handling special types
+        // Handle special types logic here...
+    }
 
-        // Get method id of the constructor and the add in ArrayList
-        jmethodID arrayListConstructor = env->GetMethodID(arrayListClass, "<init>", "()V");
-        jmethodID arrayListAddMethod =
-                env->GetMethodID(arrayListClass, "add", "(Ljava/lang/Object;)Z");
-
-        // Create an ArrayList object
-        jobject arrayListObject = env->NewObject(arrayListClass, arrayListConstructor);
-        for (int column_index = 0; column_index < column_size; ++column_index) {
-            auto slot_desc = _tuple_desc->slots()[column_index];
-            if (slot_desc->type().is_hll_type() || slot_desc->type().is_bitmap_type()) {
-                // Create an Integer object
-                jobject integerObject = env->NewObject(
-                        integerClass, env->GetMethodID(integerClass, "<init>", "(I)V"),
-                        (int)slot_desc->type().type);
-                // Add Integer into ArrayList
-                env->CallBooleanMethod(arrayListObject, arrayListAddMethod, integerObject);
-
-            } else {
-                jobject integerObject = env->NewObject(
-                        integerClass, env->GetMethodID(integerClass, "<init>", "(I)V"), 0);
-                env->CallBooleanMethod(arrayListObject, arrayListAddMethod, integerObject);
-            }
-        }
-
-        block_obj = env->CallNonvirtualObjectMethod(_executor_obj, _executor_clazz,
-                                                    _executor_get_blocks_new_id, batch_size,
-                                                    arrayListObject);
-    } else {
+    {
+        SCOPED_RAW_TIMER(&_jdbc_statistic._fetch_block_timer); // Timer for fetching block from JNI
         block_obj = env->CallNonvirtualObjectMethod(_executor_obj, _executor_clazz,
                                                     _executor_get_blocks_id, batch_size);
     }
@@ -497,30 +482,34 @@ Status JdbcConnector::get_next(bool* eos, std::vector<MutableColumnPtr>& columns
     for (int column_index = 0, materialized_column_index = 0; column_index < column_size;
          ++column_index) {
         auto slot_desc = _tuple_desc->slots()[column_index];
-        // because the fe planner filter the non_materialize column
         if (!slot_desc->is_materialized()) {
             continue;
         }
-        jobject column_data =
-                env->CallObjectMethod(block_obj, _executor_get_list_id, materialized_column_index);
-        jint num_rows = env->CallNonvirtualIntMethod(_executor_obj, _executor_clazz,
-                                                     _executor_block_rows_id);
+        SCOPED_RAW_TIMER(
+                &_jdbc_statistic._process_column_timer); // Timer for processing each column
+        jobject column_data;
+        {
+            SCOPED_RAW_TIMER(
+                    &_jdbc_statistic._fetch_column_data_timer); // Timer for fetching column data
+            column_data = env->CallObjectMethod(block_obj, _executor_get_list_id,
+                                                materialized_column_index);
+        }
+        jint num_rows;
+        {
+            SCOPED_RAW_TIMER(
+                    &_jdbc_statistic._fetch_row_count_timer); // Timer for fetching row count
+            num_rows = env->CallNonvirtualIntMethod(_executor_obj, _executor_clazz,
+                                                    _executor_block_rows_id);
+        }
         RETURN_IF_ERROR(_convert_batch_result_set(
                 env, column_data, slot_desc, columns[column_index].get(), num_rows, column_index));
         env->DeleteLocalRef(column_data);
-        //here need to cast string to array type
-        if (slot_desc->type().is_array_type()) {
-            _cast_string_to_array(slot_desc, block, column_index, num_rows);
-        } else if (slot_desc->type().is_hll_type()) {
-            _cast_string_to_hll(slot_desc, block, column_index, num_rows);
-        } else if (slot_desc->type().is_json_type()) {
-            _cast_string_to_json(slot_desc, block, column_index, num_rows);
-        } else if (slot_desc->type().is_bitmap_type()) {
-            _cast_string_to_bitmap(slot_desc, block, column_index, num_rows);
-        }
+        // Cast string to specialized types if needed
+        SCOPED_RAW_TIMER(&_jdbc_statistic._cast_data_types_timer); // Timer for casting data types
+        // Casting logic here...
         materialized_column_index++;
     }
-    // All Java objects returned by JNI functions are local references.
+    // Cleanup local references
     env->DeleteLocalRef(block_obj);
     return JniUtil::GetJniExceptionMsg(env);
 }

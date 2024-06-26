@@ -60,11 +60,18 @@ protected:
     RuntimeProfile::Counter* _load_jar_timer = nullptr;
     RuntimeProfile::Counter* _init_connector_timer = nullptr;
     RuntimeProfile::Counter* _get_data_timer = nullptr;
-    RuntimeProfile::Counter* _call_jni_next_timer = nullptr;
-    RuntimeProfile::Counter* _convert_batch_timer = nullptr;
     RuntimeProfile::Counter* _check_type_timer = nullptr;
     RuntimeProfile::Counter* _execte_read_timer = nullptr;
     RuntimeProfile::Counter* _connector_close_timer = nullptr;
+    RuntimeProfile::Counter* _jni_env_setup_timer = nullptr;
+    RuntimeProfile::Counter* _has_next_check_timer = nullptr;
+    RuntimeProfile::Counter* _prepare_block_timer = nullptr;
+    RuntimeProfile::Counter* _handle_special_types_timer = nullptr;
+    RuntimeProfile::Counter* _fetch_block_timer = nullptr;
+    RuntimeProfile::Counter* _process_column_timer = nullptr;
+    RuntimeProfile::Counter* _fetch_column_data_timer = nullptr;
+    RuntimeProfile::Counter* _fetch_row_count_timer = nullptr;
+    RuntimeProfile::Counter* _cast_data_types_timer = nullptr;
 
 private:
     void _update_profile();

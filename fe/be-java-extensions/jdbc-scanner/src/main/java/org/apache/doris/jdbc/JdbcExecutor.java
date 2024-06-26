@@ -458,12 +458,23 @@ public class JdbcExecutor {
     }
 
     public boolean hasNext() throws UdfRuntimeException {
+        long startTime = 0;
+        long endTime = 0;
         try {
             if (resultSet == null) {
+                LOG.info("hasNext() called at " + System.currentTimeMillis() + " - ResultSet is null");
                 return false;
             }
-            return resultSet.next();
+            startTime = System.currentTimeMillis(); // 开始计时
+            boolean hasNext = resultSet.next();
+            endTime = System.currentTimeMillis(); // 结束计时
+
+            LOG.info("hasNext() called at " + startTime + " - Has next: " + hasNext);
+            LOG.info("Time taken for resultSet.next(): " + (endTime - startTime) + " ms");
+
+            return hasNext;
         } catch (SQLException e) {
+            LOG.info("SQLException in hasNext() at " + System.currentTimeMillis() + ": " + e.getMessage());
             throw new UdfRuntimeException("resultSet to get next error: ", e);
         }
     }

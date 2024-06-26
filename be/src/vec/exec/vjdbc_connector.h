@@ -68,11 +68,18 @@ public:
         int64_t _load_jar_timer = 0;
         int64_t _init_connector_timer = 0;
         int64_t _get_data_timer = 0;
-        int64_t _call_jni_next_timer = 0;
-        int64_t _convert_batch_timer = 0;
         int64_t _check_type_timer = 0;
         int64_t _execte_read_timer = 0;
         int64_t _connector_close_timer = 0;
+        int64_t _jni_env_setup_timer = 0;
+        int64_t _has_next_check_timer = 0;
+        int64_t _prepare_block_timer = 0;
+        int64_t _handle_special_types_timer = 0;
+        int64_t _fetch_block_timer = 0;
+        int64_t _process_column_timer = 0;
+        int64_t _fetch_column_data_timer = 0;
+        int64_t _fetch_row_count_timer = 0;
+        int64_t _cast_data_types_timer = 0;
     };
 
     JdbcConnector(const JdbcConnectorParam& param);
