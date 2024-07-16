@@ -49,6 +49,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 @Getter
@@ -56,6 +60,8 @@ public abstract class JdbcClient {
     private static final Logger LOG = LogManager.getLogger(JdbcClient.class);
     private static final int HTTP_TIMEOUT_MS = 10000;
     protected static final int JDBC_DATETIME_SCALE = 6;
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    private final AtomicInteger connectionCount = new AtomicInteger(0);
 
     private String catalogName;
     protected String dbType;
@@ -164,6 +170,29 @@ public abstract class JdbcClient {
         }
     }
 
+    public void lazyCloseClient() {
+        scheduler.scheduleAtFixedRate(() -> {
+            if (connectionCount.get() == 0) {
+                dataSource.close();
+                scheduler.shutdown();
+                LOG.info("DataSource closed successfully after checking connection count. catalog name: {}",
+                        this.getCatalogName());
+            } else {
+                LOG.info("Connection count not zero, waiting to close DataSource. catalog name: {}",
+                        this.getCatalogName());
+            }
+        }, 0, 1, TimeUnit.MINUTES);
+
+        scheduler.schedule(() -> {
+            if (!scheduler.isShutdown()) {
+                dataSource.close();
+                scheduler.shutdown();
+                LOG.warn("DataSource forced to close after 30 minutes as the connection count did not reach zero. "
+                        + "catalog name: {}", this.getCatalogName());
+            }
+        }, 30, TimeUnit.MINUTES);
+    }
+
     public void closeClient() {
         dataSource.close();
     }
@@ -174,6 +203,7 @@ public abstract class JdbcClient {
         try {
             Thread.currentThread().setContextClassLoader(this.classLoader);
             conn = dataSource.getConnection();
+            connectionCount.incrementAndGet();  // Increment connection count
         } catch (Exception e) {
             String errorMessage = String.format("Can not connect to jdbc due to error: %s, Catalog name: %s",
                     e.getMessage(), this.getCatalogName());
@@ -194,6 +224,7 @@ public abstract class JdbcClient {
                 }
             }
         }
+        connectionCount.decrementAndGet();  // Decrement connection count
     }
 
     /**

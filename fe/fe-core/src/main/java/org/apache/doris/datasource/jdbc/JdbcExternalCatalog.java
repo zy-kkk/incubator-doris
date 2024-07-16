@@ -103,7 +103,8 @@ public class JdbcExternalCatalog extends ExternalCatalog {
     public void onRefresh(boolean invalidCache) {
         super.onRefresh(invalidCache);
         if (jdbcClient != null) {
-            jdbcClient.closeClient();
+            jdbcClient.lazyCloseClient();
+            jdbcClient = null;
         }
     }
 
@@ -112,6 +113,7 @@ public class JdbcExternalCatalog extends ExternalCatalog {
         super.onClose();
         if (jdbcClient != null) {
             jdbcClient.closeClient();
+            jdbcClient = null;
         }
     }
 
