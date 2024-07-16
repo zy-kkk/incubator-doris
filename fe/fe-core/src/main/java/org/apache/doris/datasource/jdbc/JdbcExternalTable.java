@@ -74,8 +74,7 @@ public class JdbcExternalTable extends ExternalTable {
 
     @Override
     public Optional<SchemaCacheValue> initSchema() {
-        return Optional.of(new SchemaCacheValue(((JdbcExternalCatalog) catalog).getJdbcClient()
-                .getColumnsFromJdbc(dbName, name)));
+        return Optional.of(new SchemaCacheValue(((JdbcExternalCatalog) catalog).getColumnsFromJdbc(dbName, name)));
     }
 
     private JdbcTable toJdbcTable() {
@@ -86,9 +85,9 @@ public class JdbcExternalTable extends ExternalTable {
         jdbcCatalog.configureJdbcTable(jdbcTable, fullDbName);
 
         // Set remote properties
-        jdbcTable.setRemoteDatabaseName(jdbcCatalog.getJdbcClient().getRemoteDatabaseName(this.dbName));
-        jdbcTable.setRemoteTableName(jdbcCatalog.getJdbcClient().getRemoteTableName(this.dbName, this.name));
-        jdbcTable.setRemoteColumnNames(jdbcCatalog.getJdbcClient().getRemoteColumnNames(this.dbName, this.name));
+        jdbcTable.setRemoteDatabaseName(jdbcCatalog.getRemoteDatabaseName(this.dbName));
+        jdbcTable.setRemoteTableName(jdbcCatalog.getRemoteTableName(this.dbName, this.name));
+        jdbcTable.setRemoteColumnNames(jdbcCatalog.getRemoteColumnNames(this.dbName, this.name));
 
         return jdbcTable;
     }

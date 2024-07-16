@@ -70,6 +70,7 @@ public class JdbcExternalCatalog extends ExternalCatalog {
     // Must add "transient" for Gson to ignore this field,
     // or Gson will throw exception with HikariCP
     private transient JdbcClient jdbcClient;
+    private transient JdbcIdentifierMapping jdbcIdentifierMapping;
 
     public JdbcExternalCatalog(long catalogId, String name, String resource, Map<String, String> props,
             String comment, boolean isReplay)
@@ -235,22 +236,27 @@ public class JdbcExternalCatalog extends ExternalCatalog {
                 .setConnectionPoolKeepAlive(isConnectionPoolKeepAlive());
 
         jdbcClient = JdbcClient.createJdbcClient(jdbcClientConfig);
+        jdbcIdentifierMapping = new JdbcIdentifierMapping(Boolean.parseBoolean(getLowerCaseMetaNames()),
+                getMetaNamesMapping(), jdbcClient);
     }
 
     protected List<String> listDatabaseNames() {
-        return jdbcClient.getDatabaseNameList();
+        return jdbcIdentifierMapping.setDatabaseNameMapping(jdbcClient.getDatabaseNameList());
     }
 
     @Override
     public List<String> listTableNames(SessionContext ctx, String dbName) {
         makeSureInitialized();
-        return jdbcClient.getTablesNameList(dbName);
+        String remoteDbName = jdbcIdentifierMapping.getRemoteDatabaseName(dbName);
+        return jdbcIdentifierMapping.setTableNameMapping(remoteDbName, jdbcClient.getTablesNameList(remoteDbName));
     }
 
     @Override
     public boolean tableExist(SessionContext ctx, String dbName, String tblName) {
         makeSureInitialized();
-        return jdbcClient.isTableExist(dbName, tblName);
+        String remoteDbName = jdbcIdentifierMapping.getRemoteDatabaseName(dbName);
+        String remoteTblName = jdbcIdentifierMapping.getRemoteTableName(remoteDbName, tblName);
+        return jdbcClient.isTableExist(remoteDbName, remoteTblName);
     }
 
     @Override
@@ -284,6 +290,14 @@ public class JdbcExternalCatalog extends ExternalCatalog {
         jdbcClient.executeStmt(stmt);
     }
 
+    public List<Column> getColumnsFromJdbc(String dbName, String tableName) {
+        makeSureInitialized();
+        String remoteDbName = jdbcIdentifierMapping.getRemoteDatabaseName(dbName);
+        String remoteTableName = jdbcIdentifierMapping.getRemoteTableName(remoteDbName, tableName);
+        return jdbcIdentifierMapping.setColumnNameMapping(remoteDbName, remoteTableName,
+                jdbcClient.getColumnsFromJdbc(remoteDbName, remoteTableName));
+    }
+
     /**
      * Get columns from query
      *
@@ -293,6 +307,21 @@ public class JdbcExternalCatalog extends ExternalCatalog {
     public List<Column> getColumnsFromQuery(String query) {
         makeSureInitialized();
         return jdbcClient.getColumnsFromQuery(query);
+    }
+
+    public String getRemoteDatabaseName(String localDbname) {
+        makeSureInitialized();
+        return jdbcIdentifierMapping.getRemoteDatabaseName(localDbname);
+    }
+
+    public String getRemoteTableName(String localDbName, String localTableName) {
+        makeSureInitialized();
+        return jdbcIdentifierMapping.getRemoteTableName(localDbName, localTableName);
+    }
+
+    public Map<String, String> getRemoteColumnNames(String localDbName, String localTableName) {
+        makeSureInitialized();
+        return jdbcIdentifierMapping.getRemoteColumnNames(localDbName, localTableName);
     }
 
     public void configureJdbcTable(JdbcTable jdbcTable, String tableName) {
