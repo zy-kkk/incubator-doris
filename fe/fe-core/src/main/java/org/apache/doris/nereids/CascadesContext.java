@@ -62,6 +62,7 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.trees.plans.logical.LogicalSubQueryAlias;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.GlobalVariable;
 import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.statistics.ColumnStatistic;
 import org.apache.doris.statistics.Statistics;
@@ -555,6 +556,9 @@ public class CascadesContext implements ScheduleContext {
         }
         db.readLock();
         try {
+            if (GlobalVariable.lowerCaseTableNames == 1) {
+                tableName = tableName.toLowerCase();
+            }
             TableIf table = db.getTableNullable(tableName);
             if (table == null) {
                 throw new RuntimeException("Table [" + tableName + "] does not exist in database [" + dbName + "].");

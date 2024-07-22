@@ -24,6 +24,7 @@ import org.apache.doris.common.Pair;
 import org.apache.doris.datasource.CatalogIf;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.GlobalVariable;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
@@ -92,7 +93,12 @@ public class RelationUtil {
     public static Pair<DatabaseIf<?>, TableIf> getDbAndTable(List<String> qualifierName, Env env) {
         String catalogName = qualifierName.get(0);
         String dbName = qualifierName.get(1);
-        String tableName = qualifierName.get(2);
+        String tableName;
+        if (GlobalVariable.lowerCaseTableNames == 1) {
+            tableName = qualifierName.get(2).toLowerCase();
+        } else {
+            tableName = qualifierName.get(2);
+        }
         CatalogIf<?> catalog = env.getCatalogMgr().getCatalog(catalogName);
         if (catalog == null) {
             throw new AnalysisException(java.lang.String.format("Catalog %s does not exist.", catalogName));
