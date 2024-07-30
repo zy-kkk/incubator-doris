@@ -17,6 +17,7 @@
 
 package org.apache.doris.datasource.metacache;
 
+import org.apache.doris.catalog.Env;
 import org.apache.doris.common.CacheFactory;
 
 import com.github.benmanes.caffeine.cache.CacheLoader;
@@ -34,6 +35,8 @@ import java.util.concurrent.ExecutorService;
 public class MetaCache<T> {
     private LoadingCache<String, List<String>> namesCache;
     private Map<Long, String> idToName = Maps.newConcurrentMap();
+    // table name lower cast -> table name
+    private Map<String, String> lowerCaseToTableName = Maps.newConcurrentMap();
     private LoadingCache<String, Optional<T>> metaObjCache;
 
     private String name;
@@ -68,6 +71,10 @@ public class MetaCache<T> {
                 null);
         namesCache = namesCacheFactory.buildCache(namesCacheLoader, null, executor);
         metaObjCache = objCacheFactory.buildCache(metaObjCacheLoader, removalListener, executor);
+        List<String> tableNames = namesCache.get("");
+        for (String tableName : tableNames) {
+            lowerCaseToTableName.put(tableName.toLowerCase(), tableName);
+        }
     }
 
     public List<String> listNames() {
@@ -75,11 +82,20 @@ public class MetaCache<T> {
     }
 
     public Optional<T> getMetaObj(String name, long id) {
+        if (Env.isStoredTableNamesLowerCase()) {
+            name = name.toLowerCase();
+        }
+
+        if (Env.isTableNamesCaseInsensitive()) {
+            name = lowerCaseToTableName.get(name.toLowerCase());
+        }
+
         Optional<T> val = metaObjCache.getIfPresent(name);
         if (val == null) {
             synchronized (metaObjCache) {
                 val = metaObjCache.get(name);
                 idToName.put(id, name);
+                lowerCaseToTableName.put(name.toLowerCase(), name);
             }
         }
         return val;
@@ -92,6 +108,7 @@ public class MetaCache<T> {
 
     public void updateCache(String objName, T obj) {
         metaObjCache.put(objName, Optional.of(obj));
+        lowerCaseToTableName.put(objName.toLowerCase(), objName);
         namesCache.asMap().compute("", (k, v) -> {
             if (v == null) {
                 return Lists.newArrayList(objName);
@@ -112,11 +129,11 @@ public class MetaCache<T> {
             }
         });
         metaObjCache.invalidate(objName);
+        lowerCaseToTableName.remove(objName.toLowerCase());
     }
 
     public void invalidateAll() {
         namesCache.invalidateAll();
         metaObjCache.invalidateAll();
     }
-
 }

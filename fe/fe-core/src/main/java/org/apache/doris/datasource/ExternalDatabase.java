@@ -83,6 +83,8 @@ public abstract class ExternalDatabase<T extends ExternalTable>
     protected Map<String, Long> tableNameToId = Maps.newConcurrentMap();
     @SerializedName(value = "idToTbl")
     protected Map<Long, T> idToTbl = Maps.newConcurrentMap();
+    // table name lower cast -> table name
+    private Map<String, String> lowerCaseToTableName = Maps.newConcurrentMap();
     @SerializedName(value = "lastUpdateTime")
     protected long lastUpdateTime;
     protected final InitDatabaseLog.Type dbLogType;
@@ -175,6 +177,7 @@ public abstract class ExternalDatabase<T extends ExternalTable>
     public void replayInitDb(InitDatabaseLog log, ExternalCatalog catalog) {
         Map<String, Long> tmpTableNameToId = Maps.newConcurrentMap();
         Map<Long, T> tmpIdToTbl = Maps.newConcurrentMap();
+        Map<String, String> tmpLowerCaseToTableName = Maps.newConcurrentMap();
         for (int i = 0; i < log.getRefreshCount(); i++) {
             Optional<T> table = getTableForReplay(log.getRefreshTableIds().get(i));
             // When upgrade cluster with this pr: https://github.com/apache/doris/pull/27666
@@ -185,15 +188,18 @@ public abstract class ExternalDatabase<T extends ExternalTable>
             if (table.isPresent()) {
                 tmpTableNameToId.put(table.get().getName(), table.get().getId());
                 tmpIdToTbl.put(table.get().getId(), table.get());
+                tmpLowerCaseToTableName.put(table.get().getName().toLowerCase(), table.get().getName());
             }
         }
         for (int i = 0; i < log.getCreateCount(); i++) {
             T table = buildTableForInit(log.getCreateTableNames().get(i), log.getCreateTableIds().get(i), catalog);
             tmpTableNameToId.put(table.getName(), table.getId());
             tmpIdToTbl.put(table.getId(), table);
+            tmpLowerCaseToTableName.put(table.getName().toLowerCase(), table.getName());
         }
         tableNameToId = tmpTableNameToId;
         idToTbl = tmpIdToTbl;
+        lowerCaseToTableName = tmpLowerCaseToTableName;
         lastUpdateTime = log.getLastUpdateTime();
         initialized = true;
     }
@@ -207,6 +213,7 @@ public abstract class ExternalDatabase<T extends ExternalTable>
         if (tableNames != null) {
             Map<String, Long> tmpTableNameToId = Maps.newConcurrentMap();
             Map<Long, T> tmpIdToTbl = Maps.newHashMap();
+            Map<String, String> tmpLowerCaseToTableName = Maps.newConcurrentMap();
             for (String tableName : tableNames) {
                 long tblId;
                 if (tableNameToId != null && tableNameToId.containsKey(tableName)) {
@@ -215,16 +222,19 @@ public abstract class ExternalDatabase<T extends ExternalTable>
                     T table = idToTbl.get(tblId);
                     tmpIdToTbl.put(tblId, table);
                     initDatabaseLog.addRefreshTable(tblId);
+                    tmpLowerCaseToTableName.put(table.getName().toLowerCase(), table.getName());
                 } else {
                     tblId = Env.getCurrentEnv().getNextId();
                     tmpTableNameToId.put(tableName, tblId);
                     T table = buildTableForInit(tableName, tblId, extCatalog);
                     tmpIdToTbl.put(tblId, table);
+                    tmpLowerCaseToTableName.put(table.getName().toLowerCase(), table.getName());
                     initDatabaseLog.addCreateTable(tblId, tableName);
                 }
             }
             tableNameToId = tmpTableNameToId;
             idToTbl = tmpIdToTbl;
+            lowerCaseToTableName = tmpLowerCaseToTableName;
         }
 
         lastUpdateTime = System.currentTimeMillis();
@@ -325,8 +335,19 @@ public abstract class ExternalDatabase<T extends ExternalTable>
 
     @Override
     public boolean isTableExist(String tableName) {
+        if (Env.isTableNamesCaseInsensitive()) {
+            tableName = lowerCaseToTableName.get(tableName.toLowerCase());
+            if (tableName == null) {
+                return false;
+            }
+        }
         return extCatalog.tableExist(ConnectContext.get().getSessionContext(), name, tableName);
     }
+
+    // 1、client 返回原名 (未返回原名)
+    // 2、注册 meta 根据 config.lower_case_table_names 判断注册原名或小写 (未实现)
+    // 3、查询时能通过 sql 中 tbl name 找到 FE meta 中的 table (未实现)
+    // 4、下发到数据源时的 tbl name 应当是数据源原始 tbl name (JDBC 实现)
 
     // ATTN: this method only returned cached tables.
     @Override
@@ -380,6 +401,15 @@ public abstract class ExternalDatabase<T extends ExternalTable>
             // otherwise, if 2 databases have the same table name, the id will be the same.
             return metaCache.getMetaObj(tableName, Util.genIdByName(getQualifiedName(tableName))).orElse(null);
         } else {
+            if (Env.isStoredTableNamesLowerCase()) {
+                tableName = tableName.toLowerCase();
+            }
+            if (Env.isTableNamesCaseInsensitive()) {
+                tableName = lowerCaseToTableName.get(tableName.toLowerCase());
+                if (tableName == null) {
+                    return null;
+                }
+            }
             if (!tableNameToId.containsKey(tableName)) {
                 return null;
             }
@@ -419,6 +449,7 @@ public abstract class ExternalDatabase<T extends ExternalTable>
     @Override
     public void gsonPostProcess() throws IOException {
         tableNameToId = Maps.newConcurrentMap();
+        lowerCaseToTableName = Maps.newConcurrentMap();
         Map<Long, T> tmpIdToTbl = Maps.newConcurrentMap();
         for (Object obj : idToTbl.values()) {
             if (obj instanceof LinkedTreeMap) {
@@ -429,12 +460,14 @@ public abstract class ExternalDatabase<T extends ExternalTable>
                                 ExternalInfoSchemaTable.class);
                         tmpIdToTbl.put(infoSchemaTable.getId(), (T) infoSchemaTable);
                         tableNameToId.put(infoSchemaTable.getName(), infoSchemaTable.getId());
+                        lowerCaseToTableName.put(infoSchemaTable.getName().toLowerCase(), infoSchemaTable.getName());
                         break;
                     case "ExternalMysqlTable":
                         ExternalMysqlTable mysqlTable = GsonUtils.GSON.fromJson(GsonUtils.GSON.toJson(obj),
                                 ExternalMysqlTable.class);
                         tmpIdToTbl.put(mysqlTable.getId(), (T) mysqlTable);
                         tableNameToId.put(mysqlTable.getName(), mysqlTable.getId());
+                        lowerCaseToTableName.put(mysqlTable.getName().toLowerCase(), mysqlTable.getName());
                         break;
                     default:
                         break;
@@ -443,6 +476,8 @@ public abstract class ExternalDatabase<T extends ExternalTable>
                 Preconditions.checkState(obj instanceof ExternalTable);
                 tmpIdToTbl.put(((ExternalTable) obj).getId(), (T) obj);
                 tableNameToId.put(((ExternalTable) obj).getName(), ((ExternalTable) obj).getId());
+                lowerCaseToTableName.put(((ExternalTable) obj).getName().toLowerCase(),
+                        ((ExternalTable) obj).getName());
             }
         }
         idToTbl = tmpIdToTbl;
@@ -466,6 +501,7 @@ public abstract class ExternalDatabase<T extends ExternalTable>
                 return;
             }
             idToTbl.remove(tableId);
+            lowerCaseToTableName.remove(tableName.toLowerCase());
         }
         setLastUpdateTime(System.currentTimeMillis());
         Env.getCurrentEnv().getExtMetaCacheMgr().invalidateTableCache(
@@ -492,6 +528,7 @@ public abstract class ExternalDatabase<T extends ExternalTable>
         } else {
             tableNameToId.put(tableName, tableId);
             idToTbl.put(tableId, buildTableForInit(tableName, tableId, extCatalog));
+            lowerCaseToTableName.put(tableName.toLowerCase(), tableName);
         }
         setLastUpdateTime(System.currentTimeMillis());
         return true;
