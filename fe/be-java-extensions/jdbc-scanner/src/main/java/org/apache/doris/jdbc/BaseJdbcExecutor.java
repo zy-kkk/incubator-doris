@@ -172,6 +172,22 @@ public abstract class BaseJdbcExecutor implements JdbcExecutor {
             resultSetMetaData = resultSet.getMetaData();
             int columnCount = resultSetMetaData.getColumnCount();
             block = new ArrayList<>(columnCount);
+
+            // Save the current cursor position
+            resultSet.setFetchDirection(ResultSet.FETCH_FORWARD);
+            int rowCount = 0;
+
+            // Traverse the ResultSet to count rows
+            while (resultSet.next()) {
+                rowCount++;
+            }
+
+            // Print the row count
+            LOG.info("Row count: " + rowCount);
+
+            // Move the cursor back to the beginning
+            resultSet.beforeFirst();
+
             return columnCount;
         } catch (SQLException e) {
             throw new JdbcExecutorException("JDBC executor sql has error: ", e);
@@ -361,7 +377,7 @@ public abstract class BaseJdbcExecutor implements JdbcExecutor {
         if (config.getOp() == TJdbcOperation.READ) {
             conn.setAutoCommit(false);
             Preconditions.checkArgument(sql != null, "SQL statement cannot be null for READ operation.");
-            stmt = conn.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+            stmt = conn.prepareStatement(sql, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY);
             stmt.setFetchSize(config.getBatchSize()); // set fetch size to batch size
             batchSizeNum = config.getBatchSize();
         } else {
