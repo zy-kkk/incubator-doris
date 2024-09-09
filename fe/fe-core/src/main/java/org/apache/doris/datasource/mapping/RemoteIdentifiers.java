@@ -17,17 +17,12 @@
 
 package org.apache.doris.datasource.mapping;
 
+import java.util.Set;
 
-public interface IdentifierMapping {
-    String fromRemoteSchemaName(String remoteSchemaName);
+public interface RemoteIdentifiers {
+    Set<String> getRemoteSchemas();
 
-    String fromRemoteTableName(String remoteSchemaName, String remoteTableName);
+    Set<String> getRemoteTables(String remoteSchema);
 
-    String fromRemoteColumnName(String remoteColumnName);
-
-    String toRemoteSchemaName(RemoteIdentifiers remoteIdentifiers, String schemaName);
-
-    String toRemoteTableName(RemoteIdentifiers remoteIdentifiers, String remoteSchema, String tableName);
-
-    String toRemoteColumnName(RemoteIdentifiers remoteIdentifiers, String columnName);
+    boolean storesUpperCaseIdentifiers();
 }

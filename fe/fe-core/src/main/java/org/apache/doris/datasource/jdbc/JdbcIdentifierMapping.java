@@ -18,7 +18,7 @@
 package org.apache.doris.datasource.jdbc;
 
 import org.apache.doris.datasource.jdbc.client.JdbcClient;
-import org.apache.doris.datasource.mapping.IdentifierMapping;
+import org.apache.doris.datasource.mappingold.IdentifierMapping;
 
 public class JdbcIdentifierMapping extends IdentifierMapping {
     private final JdbcClient jdbcClient;
