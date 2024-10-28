@@ -21,6 +21,7 @@ import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.JdbcResource;
 import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.catalog.Type;
+import org.apache.doris.classloader.ChildFirstClassLoader;
 import org.apache.doris.cloud.security.SecurityChecker;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.util.Util;
@@ -51,14 +52,17 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 @Getter
 public abstract class JdbcClient {
     private static final Logger LOG = LogManager.getLogger(JdbcClient.class);
-    private static final int HTTP_TIMEOUT_MS = 10000;
+    private static final ConcurrentHashMap<String, Driver> driverMap = new ConcurrentHashMap<>();
     protected static final int JDBC_DATETIME_SCALE = 6;
 
+    private Driver driverInstance;
+    private ClassLoader driverClassLoader;
     private String catalogName;
     protected String dbType;
     protected String jdbcUser;
@@ -106,7 +110,7 @@ public abstract class JdbcClient {
     }
 
     protected JdbcClient(JdbcClientConfig jdbcClientConfig) {
-        System.setProperty("com.zaxxer.hikari.useWeakReferences", "true");
+        setJdbcDriverSystemProperties();
         this.catalogName = jdbcClientConfig.getCatalog();
         this.jdbcUser = jdbcClientConfig.getUser();
         this.jdbcPassword = jdbcClientConfig.getPassword();
@@ -121,11 +125,17 @@ public abstract class JdbcClient {
                 Optional.ofNullable(jdbcClientConfig.getExcludeDatabaseMap()).orElse(Collections.emptyMap());
         this.enableConnectionPool = jdbcClientConfig.isEnableConnectionPool();
         this.dbType = parseDbType(jdbcUrl);
-        initializeClassLoader(jdbcClientConfig);
         if (enableConnectionPool) {
+            initializeClassLoader(jdbcClientConfig);
             initializeDataSource(jdbcClientConfig);
+        } else {
+            loadDriverInstance(JdbcResource.getFullDriverUrl(jdbcClientConfig.getDriverUrl()), jdbcDriverClass);
         }
         this.jdbcLowerCaseMetaMatching = new JdbcIdentifierMapping(isLowerCaseMetaNames, metaNamesMapping, this);
+    }
+
+    protected void setJdbcDriverSystemProperties() {
+        System.setProperty("com.zaxxer.hikari.useWeakReferences", "true");
     }
 
     // Initialize DataSource
@@ -148,11 +158,12 @@ public abstract class JdbcClient {
             dataSource.setConnectionTimeout(config.getConnectionPoolMaxWaitTime()); // default 5000
             dataSource.setMaxLifetime(config.getConnectionPoolMaxLifeTime()); // default 30 min
             dataSource.setIdleTimeout(config.getConnectionPoolMaxLifeTime() / 2L); // default 15 min
-            LOG.info("JdbcClient set"
-                    + " ConnectionPoolMinSize = " + config.getConnectionPoolMinSize()
-                    + ", ConnectionPoolMaxSize = " + config.getConnectionPoolMaxSize()
-                    + ", ConnectionPoolMaxWaitTime = " + config.getConnectionPoolMaxWaitTime()
-                    + ", ConnectionPoolMaxLifeTime = " + config.getConnectionPoolMaxLifeTime());
+            LOG.info("JdbcClient set ConnectionPoolMinSize = {}, "
+                            + "ConnectionPoolMaxSize = {}, "
+                            + "ConnectionPoolMaxWaitTime = {}, "
+                            + "ConnectionPoolMaxLifeTime = {}",
+                    config.getConnectionPoolMinSize(), config.getConnectionPoolMaxSize(),
+                    config.getConnectionPoolMaxWaitTime(), config.getConnectionPoolMaxLifeTime());
         } catch (Exception e) {
             throw new JdbcClientException(e.getMessage());
         } finally {
@@ -170,6 +181,26 @@ public abstract class JdbcClient {
         }
     }
 
+    private void loadDriverInstance(String driverJarPath, String driverClassName) {
+        driverInstance = driverMap.get(driverJarPath);
+        if (driverInstance == null) {
+            synchronized (JdbcClient.class) {
+                driverInstance = driverMap.get(driverJarPath);
+                if (driverInstance == null) {
+                    try {
+                        driverClassLoader = new ChildFirstClassLoader(driverJarPath);
+                        Class<?> driverClass = driverClassLoader.loadClass(driverClassName);
+                        driverInstance = (Driver) driverClass.getDeclaredConstructor().newInstance();
+                        driverMap.put(driverJarPath, driverInstance);
+                        LOG.info("Loaded driver: {} from {}", driverClassName, driverJarPath);
+                    } catch (Exception e) {
+                        throw new JdbcClientException("Failed to load JDBC driver.", e);
+                    }
+                }
+            }
+        }
+    }
+
     public static String parseDbType(String jdbcUrl) {
         try {
             return JdbcResource.parseDbType(jdbcUrl);
@@ -182,6 +213,13 @@ public abstract class JdbcClient {
         if (enableConnectionPool && dataSource != null) {
             dataSource.close();
         }
+        classLoader = null;
+        driverInstance = null;
+        driverClassLoader = null;
+    }
+
+    public void refreshMetaMatching() {
+        this.jdbcLowerCaseMetaMatching = new JdbcIdentifierMapping(isLowerCaseMetaNames, metaNamesMapping, this);
     }
 
     public Connection getConnection() throws JdbcClientException {
@@ -193,13 +231,7 @@ public abstract class JdbcClient {
     }
 
     private Connection getConnectionWithoutPool() throws JdbcClientException {
-        ClassLoader oldClassLoader = Thread.currentThread().getContextClassLoader();
         try {
-            Thread.currentThread().setContextClassLoader(this.classLoader);
-
-            Class<?> driverClass = Class.forName(jdbcDriverClass, true, this.classLoader);
-            Driver driverInstance = (Driver) driverClass.getDeclaredConstructor().newInstance();
-
             Properties info = new Properties();
             info.put("user", jdbcUser);
             info.put("password", jdbcPassword);
@@ -214,13 +246,12 @@ public abstract class JdbcClient {
                         + driverInstance.getClass().getName());
             }
 
+            LOG.info("JDBC driver version: {}: {}", catalogName, connection.getMetaData().getDriverVersion());
             return connection;
         } catch (Exception e) {
             String errorMessage = String.format("Can not connect to jdbc due to error: %s, Catalog name: %s",
                     e.getMessage(), this.getCatalogName());
             throw new JdbcClientException(errorMessage, e);
-        } finally {
-            Thread.currentThread().setContextClassLoader(oldClassLoader);
         }
     }
 
@@ -229,7 +260,9 @@ public abstract class JdbcClient {
         ClassLoader oldClassLoader = Thread.currentThread().getContextClassLoader();
         try {
             Thread.currentThread().setContextClassLoader(this.classLoader);
-            return dataSource.getConnection();
+            Connection conn =  dataSource.getConnection();
+            LOG.info("JDBC driver version: {}: {}", catalogName, conn.getMetaData().getDriverVersion());
+            return conn;
         } catch (Exception e) {
             String errorMessage = String.format(
                     "Catalog `%s` can not connect to jdbc due to error: %s",

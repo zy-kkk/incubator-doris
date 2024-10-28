@@ -17,6 +17,7 @@
 
 package org.apache.doris.jdbc;
 
+import org.apache.doris.classloader.ChildFirstClassLoader;
 import org.apache.doris.cloud.security.SecurityChecker;
 import org.apache.doris.common.exception.InternalException;
 import org.apache.doris.common.jni.utils.UdfUtils;
@@ -35,9 +36,7 @@ import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.semver4j.Semver;
 
-import java.io.FileNotFoundException;
 import java.lang.reflect.Array;
-import java.net.MalformedURLException;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.Date;
@@ -53,13 +52,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 public abstract class BaseJdbcExecutor implements JdbcExecutor {
     private static final Logger LOG = Logger.getLogger(BaseJdbcExecutor.class);
     private static final TBinaryProtocol.Factory PROTOCOL_FACTORY = new TBinaryProtocol.Factory();
+    private static final ConcurrentHashMap<String, Driver> driverMap = new ConcurrentHashMap<>();
     private HikariDataSource hikariDataSource = null;
     private final byte[] hikariDataSourceLock = new byte[0];
+    private Driver driverInstance;
+    private ClassLoader driverClassLoader;
     private Connection conn = null;
     protected JdbcDataSourceConfig config;
     protected PreparedStatement preparedStatement = null;
@@ -73,6 +76,7 @@ public abstract class BaseJdbcExecutor implements JdbcExecutor {
     protected String jdbcDriverVersion;
 
     public BaseJdbcExecutor(byte[] thriftParams) throws Exception {
+        setJdbcDriverSystemProperties();
         TJdbcExecutorCtorParams request = new TJdbcExecutorCtorParams();
         TDeserializer deserializer = new TDeserializer(PROTOCOL_FACTORY);
         try {
@@ -97,9 +101,9 @@ public abstract class BaseJdbcExecutor implements JdbcExecutor {
                 .setConnectionPoolKeepAlive(request.connection_pool_keep_alive)
                 .setEnableConnectionPool(request.enable_connection_pool);
         JdbcDataSource.getDataSource().setCleanupInterval(request.connection_pool_cache_clear_time);
-        System.setProperty("com.zaxxer.hikari.useWeakReferences", "true");
         init(config, request.statement);
         this.jdbcDriverVersion = getJdbcDriverVersion();
+        LOG.info("JDBC driver version: " + config.getCatalogId() + ": " + jdbcDriverVersion);
     }
 
     public void close() throws Exception {
@@ -127,6 +131,8 @@ public abstract class BaseJdbcExecutor implements JdbcExecutor {
                     hikariDataSource = null;
                 }
             }
+            driverInstance = null;
+            driverClassLoader = null;
         }
     }
 
@@ -144,6 +150,11 @@ public abstract class BaseJdbcExecutor implements JdbcExecutor {
 
     protected void abortReadConnection(Connection connection, ResultSet resultSet)
             throws SQLException {
+    }
+
+
+    protected void setJdbcDriverSystemProperties() {
+        System.setProperty("com.zaxxer.hikari.useWeakReferences", "true");
     }
 
     public void cleanDataSource() {
@@ -295,77 +306,92 @@ public abstract class BaseJdbcExecutor implements JdbcExecutor {
     private void init(JdbcDataSourceConfig config, String sql) throws JdbcExecutorException {
         ClassLoader oldClassLoader = Thread.currentThread().getContextClassLoader();
         try {
-            ClassLoader parent = getClass().getClassLoader();
-            ClassLoader classLoader = UdfUtils.getClassLoader(config.getJdbcDriverUrl(), parent);
-            Thread.currentThread().setContextClassLoader(classLoader);
             if (config.isEnableConnectionPool()) {
-                String hikariDataSourceKey = config.createCacheKey();
-                hikariDataSource = JdbcDataSource.getDataSource().getSource(hikariDataSourceKey);
-                if (hikariDataSource == null) {
-                    synchronized (hikariDataSourceLock) {
-                        hikariDataSource = JdbcDataSource.getDataSource().getSource(hikariDataSourceKey);
-                        if (hikariDataSource == null) {
-                            long start = System.currentTimeMillis();
-                            HikariDataSource ds = new HikariDataSource();
-                            ds.setDriverClassName(config.getJdbcDriverClass());
-                            ds.setJdbcUrl(SecurityChecker.getInstance().getSafeJdbcUrl(config.getJdbcUrl()));
-                            ds.setUsername(config.getJdbcUser());
-                            ds.setPassword(config.getJdbcPassword());
-                            ds.setMinimumIdle(config.getConnectionPoolMinSize()); // default 1
-                            ds.setMaximumPoolSize(config.getConnectionPoolMaxSize()); // default 10
-                            ds.setConnectionTimeout(config.getConnectionPoolMaxWaitTime()); // default 5000
-                            ds.setMaxLifetime(config.getConnectionPoolMaxLifeTime()); // default 30 min
-                            ds.setIdleTimeout(config.getConnectionPoolMaxLifeTime() / 2L); // default 15 min
-                            setValidationQuery(ds);
-                            if (config.isConnectionPoolKeepAlive()) {
-                                ds.setKeepaliveTime(config.getConnectionPoolMaxLifeTime() / 5L); // default 6 min
-                            }
-                            hikariDataSource = ds;
-                            JdbcDataSource.getDataSource().putSource(hikariDataSourceKey, hikariDataSource);
-                            LOG.info("JdbcClient set"
-                                    + " ConnectionPoolMinSize = " + config.getConnectionPoolMinSize()
-                                    + ", ConnectionPoolMaxSize = " + config.getConnectionPoolMaxSize()
-                                    + ", ConnectionPoolMaxWaitTime = " + config.getConnectionPoolMaxWaitTime()
-                                    + ", ConnectionPoolMaxLifeTime = " + config.getConnectionPoolMaxLifeTime()
-                                    + ", ConnectionPoolKeepAlive = " + config.isConnectionPoolKeepAlive());
-                            LOG.info("init datasource [" + (config.getJdbcUrl() + config.getJdbcUser()) + "] cost: " + (
-                                    System.currentTimeMillis() - start) + " ms");
-                        }
-                    }
-                }
-                conn = hikariDataSource.getConnection();
+                initWithConnectionPool(config);
             } else {
-                Class<?> driverClass = Class.forName(config.getJdbcDriverClass(), true, classLoader);
-                Driver driverInstance = (Driver) driverClass.getDeclaredConstructor().newInstance();
-
-                Properties info = new Properties();
-                info.put("user", config.getJdbcUser());
-                info.put("password", config.getJdbcPassword());
-
-                conn = driverInstance.connect(SecurityChecker.getInstance().getSafeJdbcUrl(config.getJdbcUrl()), info);
-                if (conn == null) {
-                    throw new SQLException("Failed to establish a connection. The JDBC driver returned null. "
-                            + "Please check if the JDBC URL is correct: "
-                            + config.getJdbcUrl()
-                            + ". Ensure that the URL format and parameters are valid for the driver: "
-                            + driverInstance.getClass().getName());
-                }
+                loadDriverInstance(config.getJdbcDriverUrl(), config.getJdbcDriverClass());
+                initWithoutConnectionPool(config);
             }
 
             initializeStatement(conn, config, sql);
 
-        } catch (MalformedURLException e) {
-            throw new JdbcExecutorException("MalformedURLException to load class about "
-                    + config.getJdbcDriverUrl(), e);
-        } catch (SQLException e) {
-            throw new JdbcExecutorException("Initialize datasource failed: ", e);
-        } catch (FileNotFoundException e) {
-            throw new JdbcExecutorException("FileNotFoundException failed: ", e);
         } catch (Exception e) {
             throw new JdbcExecutorException("Initialize datasource failed: ", e);
         } finally {
             Thread.currentThread().setContextClassLoader(oldClassLoader);
         }
+    }
+
+    private void loadDriverInstance(String driverJarPath, String driverClassName) throws Exception {
+        driverInstance = driverMap.get(driverJarPath);
+        if (driverInstance == null) {
+            synchronized (BaseJdbcExecutor.class) {
+                driverInstance = driverMap.get(driverJarPath);
+                if (driverInstance == null) {
+                    driverClassLoader = new ChildFirstClassLoader(driverJarPath);
+                    Class<?> driverClass = driverClassLoader.loadClass(driverClassName);
+                    driverInstance = (Driver) driverClass.getDeclaredConstructor().newInstance();
+                    driverMap.put(driverJarPath, driverInstance);
+                    LOG.info("Loaded driver: " + driverClassName + " from " + driverJarPath);
+                }
+            }
+        }
+    }
+
+    private void initWithoutConnectionPool(JdbcDataSourceConfig config) throws Exception {
+        Properties info = new Properties();
+        info.put("user", config.getJdbcUser());
+        info.put("password", config.getJdbcPassword());
+
+        conn = driverInstance.connect(SecurityChecker.getInstance().getSafeJdbcUrl(config.getJdbcUrl()), info);
+        if (conn == null) {
+            throw new SQLException("Failed to establish a connection. The JDBC driver returned null. "
+                    + "Please check if the JDBC URL is correct: "
+                    + config.getJdbcUrl()
+                    + ". Ensure that the URL format and parameters are valid for the driver: "
+                    + driverInstance.getClass().getName());
+        }
+    }
+
+    private void initWithConnectionPool(JdbcDataSourceConfig config) throws Exception {
+        ClassLoader parent = getClass().getClassLoader();
+        ClassLoader classLoader = UdfUtils.getClassLoader(config.getJdbcDriverUrl(), parent);
+        Thread.currentThread().setContextClassLoader(classLoader);
+        String hikariDataSourceKey = config.createCacheKey();
+        hikariDataSource = JdbcDataSource.getDataSource().getSource(hikariDataSourceKey);
+        if (hikariDataSource == null) {
+            synchronized (hikariDataSourceLock) {
+                hikariDataSource = JdbcDataSource.getDataSource().getSource(hikariDataSourceKey);
+                if (hikariDataSource == null) {
+                    long start = System.currentTimeMillis();
+                    HikariDataSource ds = new HikariDataSource();
+                    ds.setDriverClassName(config.getJdbcDriverClass());
+                    ds.setJdbcUrl(SecurityChecker.getInstance().getSafeJdbcUrl(config.getJdbcUrl()));
+                    ds.setUsername(config.getJdbcUser());
+                    ds.setPassword(config.getJdbcPassword());
+                    ds.setMinimumIdle(config.getConnectionPoolMinSize()); // default 1
+                    ds.setMaximumPoolSize(config.getConnectionPoolMaxSize()); // default 10
+                    ds.setConnectionTimeout(config.getConnectionPoolMaxWaitTime()); // default 5000
+                    ds.setMaxLifetime(config.getConnectionPoolMaxLifeTime()); // default 30 min
+                    ds.setIdleTimeout(config.getConnectionPoolMaxLifeTime() / 2L); // default 15 min
+                    setValidationQuery(ds);
+                    if (config.isConnectionPoolKeepAlive()) {
+                        ds.setKeepaliveTime(config.getConnectionPoolMaxLifeTime() / 5L); // default 6 min
+                    }
+                    hikariDataSource = ds;
+                    JdbcDataSource.getDataSource().putSource(hikariDataSourceKey, hikariDataSource);
+                    LOG.info("JdbcClient set"
+                            + " ConnectionPoolMinSize = " + config.getConnectionPoolMinSize()
+                            + ", ConnectionPoolMaxSize = " + config.getConnectionPoolMaxSize()
+                            + ", ConnectionPoolMaxWaitTime = " + config.getConnectionPoolMaxWaitTime()
+                            + ", ConnectionPoolMaxLifeTime = " + config.getConnectionPoolMaxLifeTime()
+                            + ", ConnectionPoolKeepAlive = " + config.isConnectionPoolKeepAlive());
+                    LOG.info("init datasource [" + (config.getJdbcUrl() + config.getJdbcUser()) + "] cost: " + (
+                            System.currentTimeMillis() - start) + " ms");
+                }
+            }
+        }
+        conn = hikariDataSource.getConnection();
     }
 
     protected void setValidationQuery(HikariDataSource ds) {

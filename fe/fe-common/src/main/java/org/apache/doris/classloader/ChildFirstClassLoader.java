@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-package org.apache.doris.common.util;
+package org.apache.doris.classloader;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -64,6 +66,35 @@ public class ChildFirstClassLoader extends URLClassLoader {
             if ("file".equals(url.getProtocol())) {
                 this.jarURLs.add(url);
             }
+        }
+    }
+
+    /**
+     * Constructs a new ChildFirstClassLoader with the given JAR file path.
+     * This constructor creates a URL from the JAR file path and stores it for class loading.
+     *
+     * @param jarPath The path to the plugin JAR file.
+     * @throws IOException If there is an error opening the JAR file.
+     */
+    public ChildFirstClassLoader(String jarPath) throws IOException {
+        super(new URL[]{}, ChildFirstClassLoader.class.getClassLoader());
+        this.jarURLs = new ArrayList<>();
+        File file;
+        try {
+            if (jarPath.startsWith("file:") || jarPath.startsWith("http:") || jarPath.startsWith("https:")) {
+                URI uri = new URI(jarPath);
+                file = new File(uri).getCanonicalFile();
+            } else {
+                file = new File(jarPath).getCanonicalFile();
+            }
+            if (!file.exists()) {
+                throw new IOException("Cannot find local file: " + file.getAbsolutePath());
+            }
+            URL jarURL = file.toURI().toURL();
+            jarURLs.add(jarURL);
+            this.addURL(jarURL);
+        } catch (URISyntaxException e) {
+            throw new IOException("Invalid jarPath URI: " + jarPath, e);
         }
     }
 
