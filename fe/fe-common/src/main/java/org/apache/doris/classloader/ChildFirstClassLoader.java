@@ -21,10 +21,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
@@ -79,24 +81,50 @@ public class ChildFirstClassLoader extends URLClassLoader {
     public ChildFirstClassLoader(String jarPath) throws IOException {
         super(new URL[]{}, ChildFirstClassLoader.class.getClassLoader());
         this.jarURLs = new ArrayList<>();
-        File file;
         try {
-            if (jarPath.startsWith("file:") || jarPath.startsWith("http:") || jarPath.startsWith("https:")) {
+            URL jarURL;
+            if (jarPath.startsWith("file:")) {
+                // It's a file URI
                 URI uri = new URI(jarPath);
-                file = new File(uri).getCanonicalFile();
+                File file = new File(uri).getCanonicalFile();
+                if (!file.exists()) {
+                    throw new IOException("Cannot find local file: " + file.getAbsolutePath());
+                }
+                jarURL = file.toURI().toURL();
+                jarURLs.add(jarURL);
+                this.addURL(jarURL);
+            } else if (jarPath.startsWith("http:") || jarPath.startsWith("https:")) {
+                // It's an HTTP(S) URL
+                // Download the JAR file to a temporary location
+                jarURL = new URL(jarPath);
+                File tempFile = File.createTempFile("driver", ".jar");
+                tempFile.deleteOnExit();
+                try (InputStream in = jarURL.openStream();
+                        OutputStream out = Files.newOutputStream(tempFile.toPath())) {
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, bytesRead);
+                    }
+                }
+                jarURL = tempFile.toURI().toURL();
+                jarURLs.add(jarURL);
+                this.addURL(jarURL);
             } else {
-                file = new File(jarPath).getCanonicalFile();
+                // It's a local file path
+                File file = new File(jarPath).getCanonicalFile();
+                if (!file.exists()) {
+                    throw new IOException("Cannot find local file: " + file.getAbsolutePath());
+                }
+                jarURL = file.toURI().toURL();
+                jarURLs.add(jarURL);
+                this.addURL(jarURL);
             }
-            if (!file.exists()) {
-                throw new IOException("Cannot find local file: " + file.getAbsolutePath());
-            }
-            URL jarURL = file.toURI().toURL();
-            jarURLs.add(jarURL);
-            this.addURL(jarURL);
         } catch (URISyntaxException e) {
             throw new IOException("Invalid jarPath URI: " + jarPath, e);
         }
     }
+
 
     /**
      * Attempts to load the class with the specified name.
