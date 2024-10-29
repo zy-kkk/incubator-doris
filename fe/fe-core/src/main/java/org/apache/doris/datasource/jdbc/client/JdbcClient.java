@@ -35,6 +35,8 @@ import lombok.Getter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.Closeable;
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -52,13 +54,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 @Getter
 public abstract class JdbcClient {
     private static final Logger LOG = LogManager.getLogger(JdbcClient.class);
-    private static final ConcurrentHashMap<String, Driver> driverMap = new ConcurrentHashMap<>();
     protected static final int JDBC_DATETIME_SCALE = 6;
 
     private Driver driverInstance;
@@ -182,22 +182,13 @@ public abstract class JdbcClient {
     }
 
     private void loadDriverInstance(String driverJarPath, String driverClassName) {
-        driverInstance = driverMap.get(driverJarPath);
-        if (driverInstance == null) {
-            synchronized (JdbcClient.class) {
-                driverInstance = driverMap.get(driverJarPath);
-                if (driverInstance == null) {
-                    try {
-                        driverClassLoader = new ChildFirstClassLoader(driverJarPath);
-                        Class<?> driverClass = driverClassLoader.loadClass(driverClassName);
-                        driverInstance = (Driver) driverClass.getDeclaredConstructor().newInstance();
-                        driverMap.put(driverJarPath, driverInstance);
-                        LOG.info("Loaded driver: {} from {}", driverClassName, driverJarPath);
-                    } catch (Exception e) {
-                        throw new JdbcClientException("Failed to load JDBC driver.", e);
-                    }
-                }
-            }
+        try {
+            driverClassLoader = new ChildFirstClassLoader(driverJarPath);
+            Class<?> driverClass = driverClassLoader.loadClass(driverClassName);
+            driverInstance = (Driver) driverClass.getDeclaredConstructor().newInstance();
+            LOG.info("Loaded driver: {} from {}", driverClassName, driverJarPath);
+        } catch (Exception e) {
+            throw new JdbcClientException("Failed to load JDBC driver.", e);
         }
     }
 
@@ -213,10 +204,22 @@ public abstract class JdbcClient {
         if (enableConnectionPool && dataSource != null) {
             dataSource.close();
         }
-        classLoader = null;
+
+        // Close the class loader if possible
+        if (driverClassLoader instanceof Closeable) {
+            try {
+                ((Closeable) driverClassLoader).close();
+            } catch (IOException e) {
+                LOG.warn("Failed to close driverClassLoader: ", e);
+            }
+        }
+
+        // Clear references
         driverInstance = null;
         driverClassLoader = null;
+        classLoader = null;
     }
+
 
     public void refreshMetaMatching() {
         this.jdbcLowerCaseMetaMatching = new JdbcIdentifierMapping(isLowerCaseMetaNames, metaNamesMapping, this);
