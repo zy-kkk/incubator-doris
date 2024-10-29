@@ -29,6 +29,7 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -176,6 +177,24 @@ public class ChildFirstClassLoader extends URLClassLoader {
         }
         // If the class was not found in any JAR file, throw ClassNotFoundException
         throw new ClassNotFoundException(name);
+    }
+
+    @Override
+    public URL findResource(String name) {
+        URL url = super.findResource(name);
+        if (url == null) {
+            url = getParent().getResource(name);
+        }
+        return url;
+    }
+
+    @Override
+    public Enumeration<URL> findResources(String name) throws IOException {
+        Enumeration<URL> urls = super.findResources(name);
+        if (!urls.hasMoreElements()) {
+            urls = getParent().getResources(name);
+        }
+        return urls;
     }
 
     /**
