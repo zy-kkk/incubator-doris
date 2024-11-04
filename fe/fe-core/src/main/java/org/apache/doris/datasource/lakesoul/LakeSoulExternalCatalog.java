@@ -51,7 +51,7 @@ public class LakeSoulExternalCatalog extends ExternalCatalog {
     }
 
     @Override
-    protected List<String> listDatabaseNames() {
+    public List<String> listDatabaseNames() {
         initLocalObjectsImpl();
         return lakesoulMetadataManager.listNamespaces();
     }

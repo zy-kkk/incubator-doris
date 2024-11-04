@@ -17,9 +17,6 @@
 
 package org.apache.doris.datasource.mapping;
 
-import java.util.List;
-import java.util.Map;
-
 public interface IdentifierMapping {
 
     /**
@@ -28,7 +25,7 @@ public interface IdentifierMapping {
      * @param remoteDatabaseNames the list of remote database names to be mapped
      * @return a list of corresponding local database names
      */
-    List<String> fromRemoteDatabaseName(List<String> remoteDatabaseNames);
+    String fromRemoteDatabaseName(String remoteDatabaseName);
 
     /**
      * Maps a list of remote table names in a specified remote database to their corresponding local table names.
@@ -37,7 +34,7 @@ public interface IdentifierMapping {
      * @param remoteTableNames the list of remote table names to be mapped
      * @return a list of corresponding local table names
      */
-    List<String> fromRemoteTableName(String remoteDatabaseName, List<String> remoteTableNames);
+    String fromRemoteTableName(String remoteDatabaseName, String remoteTableName);
 
     /**
      * Maps a list of remote columns in a specified remote database and table to their corresponding local columns.
@@ -47,8 +44,7 @@ public interface IdentifierMapping {
      * @param remoteColumnNames the list of remote column names to be mapped
      * @return a list of corresponding local columns
      */
-    List<String> fromRemoteColumnName(String remoteDatabaseName, String remoteTableName,
-            List<String> remoteColumnNames);
+    String fromRemoteColumnName(String remoteDatabaseName, String remoteTableName, String remoteColumnNames);
 
     /**
      * Maps a local database name to its corresponding remote database name.
@@ -74,6 +70,5 @@ public interface IdentifierMapping {
      * @param remoteTableName the name of the remote table
      * @return a map of local column names to corresponding remote column names
      */
-    Map<String, String> toRemoteColumnNames(String remoteDatabaseName, String remoteTableName);
+    String toRemoteColumnName(String remoteDatabaseName, String remoteTableName, String localColumnNames);
 }
-

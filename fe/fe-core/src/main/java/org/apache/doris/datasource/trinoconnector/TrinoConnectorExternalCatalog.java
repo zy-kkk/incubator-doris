@@ -169,7 +169,7 @@ public class TrinoConnectorExternalCatalog extends ExternalCatalog {
     }
 
     @Override
-    protected List<String> listDatabaseNames() {
+    public List<String> listDatabaseNames() {
         ConnectorSession connectorSession = trinoSession.toConnectorSession(trinoCatalogHandle);
         ConnectorTransactionHandle connectorTransactionHandle = this.connector.beginTransaction(
                 IsolationLevel.READ_UNCOMMITTED, true, true);

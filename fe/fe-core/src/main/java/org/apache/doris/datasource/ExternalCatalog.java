@@ -48,7 +48,6 @@ import org.apache.doris.datasource.infoschema.ExternalInfoSchemaDatabase;
 import org.apache.doris.datasource.infoschema.ExternalMysqlDatabase;
 import org.apache.doris.datasource.jdbc.JdbcExternalDatabase;
 import org.apache.doris.datasource.lakesoul.LakeSoulExternalDatabase;
-import org.apache.doris.datasource.mapping.IdentifierMapping;
 import org.apache.doris.datasource.maxcompute.MaxComputeExternalDatabase;
 import org.apache.doris.datasource.metacache.MetaCache;
 import org.apache.doris.datasource.operations.ExternalMetadataOps;
@@ -151,9 +150,6 @@ public abstract class ExternalCatalog
     protected Optional<Boolean> useMetaCache = Optional.empty();
     protected MetaCache<ExternalDatabase<? extends ExternalTable>> metaCache;
 
-    protected IdentifierMapping identifierMapping;
-    private boolean mappingsInitialized = false;
-
     public ExternalCatalog() {
     }
 
@@ -177,17 +173,13 @@ public abstract class ExternalCatalog
      * set some default properties when creating catalog
      * @return list of database names in this catalog
      */
-    protected List<String> listDatabaseNames() {
+    public List<String> listDatabaseNames() {
         if (metadataOps == null) {
             throw new UnsupportedOperationException("Unsupported operation: "
                     + "listDatabaseNames from remote client when init catalog with " + logType.name());
         } else {
             return metadataOps.listDatabaseNames();
         }
-    }
-
-    // only for forward to master
-    protected void buildDatabaseMapping() {
     }
 
     // Will be called when creating catalog(so when as replaying)
@@ -217,10 +209,6 @@ public abstract class ExternalCatalog
      * @return names of tables in specified database
      */
     public abstract List<String> listTableNames(SessionContext ctx, String dbName);
-
-    // only for forward to master
-    protected void buildTableMapping(SessionContext ctx, String dbName) {
-    }
 
     /**
      * check if the specified table exist.
@@ -285,10 +273,6 @@ public abstract class ExternalCatalog
                 init();
             }
             initialized = true;
-        }
-        if (!mappingsInitialized) {
-            buildDatabaseMapping();
-            mappingsInitialized = true;
         }
     }
 
@@ -418,7 +402,6 @@ public abstract class ExternalCatalog
     public void onRefresh(boolean invalidCache) {
         this.objectCreated = false;
         this.initialized = false;
-        this.mappingsInitialized = false;
         synchronized (this.propLock) {
             this.convertedProperties = null;
         }
@@ -777,7 +760,6 @@ public abstract class ExternalCatalog
         }
         this.propLock = new byte[0];
         this.initialized = false;
-        this.mappingsInitialized = false;
         setDefaultPropsIfMissing(true);
         if (tableAutoAnalyzePolicy == null) {
             tableAutoAnalyzePolicy = Maps.newHashMap();
@@ -863,6 +845,14 @@ public abstract class ExternalCatalog
 
     protected Map<String, Boolean> getExcludeDatabaseMap() {
         return getSpecifiedDatabaseMap(Resource.EXCLUDE_DATABASE_LIST);
+    }
+
+    public String getLowerCaseMetaNames() {
+        return catalogProperty.getOrDefault(Resource.LOWER_CASE_META_NAMES, "false");
+    }
+
+    public String getMetaNamesMapping() {
+        return catalogProperty.getOrDefault(Resource.META_NAMES_MAPPING, "");
     }
 
     private Map<String, Boolean> getSpecifiedDatabaseMap(String catalogPropertyKey) {

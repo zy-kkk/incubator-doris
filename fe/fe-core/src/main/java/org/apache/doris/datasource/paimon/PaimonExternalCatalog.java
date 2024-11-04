@@ -81,7 +81,7 @@ public abstract class PaimonExternalCatalog extends ExternalCatalog {
         return catalogType;
     }
 
-    protected List<String> listDatabaseNames() {
+    public List<String> listDatabaseNames() {
         return HadoopUGI.ugiDoAs(authConf, () -> new ArrayList<>(catalog.listDatabases()));
     }
 

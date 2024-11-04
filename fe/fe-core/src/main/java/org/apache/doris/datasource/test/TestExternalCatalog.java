@@ -63,7 +63,7 @@ public class TestExternalCatalog extends ExternalCatalog {
     protected void initLocalObjectsImpl() {
     }
 
-    protected List<String> listDatabaseNames() {
+    public List<String> listDatabaseNames() {
         return Lists.newArrayList(catalogProvider.getMetadata().keySet());
     }
 

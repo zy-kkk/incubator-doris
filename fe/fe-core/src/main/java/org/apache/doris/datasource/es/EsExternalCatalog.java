@@ -145,7 +145,7 @@ public class EsExternalCatalog extends ExternalCatalog {
     }
 
     @Override
-    protected List<String> listDatabaseNames() {
+    public List<String> listDatabaseNames() {
         return Lists.newArrayList(DEFAULT_DB);
     }
 

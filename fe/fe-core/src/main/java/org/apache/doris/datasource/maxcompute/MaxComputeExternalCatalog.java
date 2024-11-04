@@ -204,7 +204,7 @@ public class MaxComputeExternalCatalog extends ExternalCatalog {
         return odps;
     }
 
-    protected List<String> listDatabaseNames() {
+    public List<String> listDatabaseNames() {
         List<String> result = new ArrayList<>();
         result.add(defaultProject);
 

@@ -63,7 +63,7 @@ public class IcebergGlueExternalCatalog extends IcebergExternalCatalog {
     }
 
     @Override
-    protected List<String> listDatabaseNames() {
+    public List<String> listDatabaseNames() {
         return metadataOps.listDatabaseNames();
     }
 }

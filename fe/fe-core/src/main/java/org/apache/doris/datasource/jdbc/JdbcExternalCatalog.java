@@ -32,7 +32,8 @@ import org.apache.doris.datasource.SessionContext;
 import org.apache.doris.datasource.jdbc.client.JdbcClient;
 import org.apache.doris.datasource.jdbc.client.JdbcClientConfig;
 import org.apache.doris.datasource.jdbc.client.JdbcClientException;
-import org.apache.doris.datasource.mapping.DefaultIdentifierMapping;
+import org.apache.doris.datasource.mapping.JdbcIdentifierMapping;
+import org.apache.doris.datasource.mapping.IdentifierMapping;
 import org.apache.doris.proto.InternalService;
 import org.apache.doris.proto.InternalService.PJdbcTestConnectionRequest;
 import org.apache.doris.proto.InternalService.PJdbcTestConnectionResult;
@@ -73,12 +74,14 @@ public class JdbcExternalCatalog extends ExternalCatalog {
     // Must add "transient" for Gson to ignore this field,
     // or Gson will throw exception with HikariCP
     private transient JdbcClient jdbcClient;
+    private transient IdentifierMapping identifierMapping;
 
     public JdbcExternalCatalog(long catalogId, String name, String resource, Map<String, String> props,
             String comment)
             throws DdlException {
         super(catalogId, name, InitCatalogLog.Type.JDBC, comment);
         this.catalogProperty = new CatalogProperty(resource, processCompatibleProperties(props));
+        this.identifierMapping = new JdbcIdentifierMapping(this);
     }
 
     @Override
@@ -181,16 +184,6 @@ public class JdbcExternalCatalog extends ExternalCatalog {
                 JdbcResource.ONLY_SPECIFIED_DATABASE));
     }
 
-    public String getLowerCaseMetaNames() {
-        return catalogProperty.getOrDefault(JdbcResource.LOWER_CASE_META_NAMES, JdbcResource.getDefaultPropertyValue(
-                JdbcResource.LOWER_CASE_META_NAMES));
-    }
-
-    public String getMetaNamesMapping() {
-        return catalogProperty.getOrDefault(JdbcResource.META_NAMES_MAPPING, JdbcResource.getDefaultPropertyValue(
-                JdbcResource.META_NAMES_MAPPING));
-    }
-
     public int getConnectionPoolMinSize() {
         return Integer.parseInt(catalogProperty.getOrDefault(JdbcResource.CONNECTION_POOL_MIN_SIZE, JdbcResource
                 .getDefaultPropertyValue(JdbcResource.CONNECTION_POOL_MIN_SIZE)));
@@ -240,22 +233,13 @@ public class JdbcExternalCatalog extends ExternalCatalog {
                 .setConnectionPoolKeepAlive(isConnectionPoolKeepAlive());
 
         jdbcClient = JdbcClient.createJdbcClient(jdbcClientConfig);
-        identifierMapping = new DefaultIdentifierMapping(Boolean.parseBoolean(getLowerCaseMetaNames()),
-                getMetaNamesMapping());
     }
 
     @Override
-    protected List<String> listDatabaseNames() {
-        return getMappedDatabaseNames();
-    }
-
-    @Override
-    protected void buildDatabaseMapping() {
-        getMappedDatabaseNames();
-    }
-
-    private List<String> getMappedDatabaseNames() {
-        return identifierMapping.fromRemoteDatabaseName(jdbcClient.getDatabaseNameList());
+    public List<String> listDatabaseNames() {
+        return jdbcClient.getDatabaseNameList().stream()
+                .map(identifierMapping::fromRemoteDatabaseName)
+                .collect(Collectors.toList());
     }
 
     protected String getRemoteDatabaseName(String dbName) {
@@ -266,14 +250,9 @@ public class JdbcExternalCatalog extends ExternalCatalog {
     public List<String> listTableNames(SessionContext ctx, String dbName) {
         makeSureInitialized();
         String remoteDbName = getRemoteDatabaseName(dbName);
-        return identifierMapping.fromRemoteTableName(remoteDbName, jdbcClient.getTablesNameList(remoteDbName));
-    }
-
-    @Override
-    protected void buildTableMapping(SessionContext ctx, String dbName) {
-        String remoteDbName = getRemoteDatabaseName(dbName);
-        identifierMapping.fromRemoteTableName(getRemoteDatabaseName(dbName),
-                jdbcClient.getTablesNameList(remoteDbName));
+        return jdbcClient.getTablesNameList(remoteDbName).stream()
+                .map(tblName -> identifierMapping.fromRemoteTableName(remoteDbName, tblName))
+                .collect(Collectors.toList());
     }
 
     protected String getRemoteTableName(String dbName, String tblName) {
@@ -298,8 +277,11 @@ public class JdbcExternalCatalog extends ExternalCatalog {
         List<String> remoteColumnNames = remoteColumns.stream()
                 .map(Column::getName)
                 .collect(Collectors.toList());
-        List<String> localColumnNames = identifierMapping.fromRemoteColumnName(remoteDbName, remoteTblName,
-                remoteColumnNames);
+
+        List<String> localColumnNames = remoteColumnNames.stream()
+                .map(remoteColumnName -> identifierMapping.fromRemoteColumnName(remoteDbName, remoteTblName,
+                        remoteColumnName))
+                .collect(Collectors.toList());
 
         for (int i = 0; i < remoteColumns.size(); i++) {
             remoteColumns.get(i).setName(localColumnNames.get(i));
@@ -308,9 +290,9 @@ public class JdbcExternalCatalog extends ExternalCatalog {
         return remoteColumns;
     }
 
-    protected Map<String, String> getRemoteColumnNames(String dbName, String tblName) {
-        return identifierMapping.toRemoteColumnNames(getRemoteDatabaseName(dbName),
-                getRemoteTableName(dbName, tblName));
+    protected String getRemoteColumnNames(String dbName, String tblName, String localColumnName) {
+        return identifierMapping.toRemoteColumnName(getRemoteDatabaseName(dbName), getRemoteTableName(dbName, tblName),
+                localColumnName);
     }
 
     @Override

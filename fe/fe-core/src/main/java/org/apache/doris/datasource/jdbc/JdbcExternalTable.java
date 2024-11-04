@@ -116,12 +116,16 @@ public class JdbcExternalTable extends ExternalTable {
         // Set remote properties
         jdbcTable.setRemoteDatabaseName(jdbcCatalog.getRemoteDatabaseName(this.dbName));
         jdbcTable.setRemoteTableName(jdbcCatalog.getRemoteTableName(this.dbName, this.name));
-        Map<String, String> remoteColumnNames = jdbcCatalog.getRemoteColumnNames(this.dbName, this.name);
+        Map<String, String> remoteColumnNames = Maps.newHashMap();
+        for (Column column : schema) {
+            String remoteColumnName = jdbcCatalog.getRemoteColumnNames(this.dbName, this.name, column.getName());
+            remoteColumnNames.put(column.getName(), remoteColumnName);
+        }
         if (!remoteColumnNames.isEmpty()) {
             jdbcTable.setRemoteColumnNames(remoteColumnNames);
         } else {
             remoteColumnNames = Maps.newHashMap();
-            for (Column column : schema) {
+            for (Column column : getFullSchema()) {
                 remoteColumnNames.put(column.getName(), column.getName());
             }
             jdbcTable.setRemoteColumnNames(remoteColumnNames);
