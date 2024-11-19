@@ -52,8 +52,9 @@ public class PaimonExternalTable extends ExternalTable {
 
     private static final Logger LOG = LogManager.getLogger(PaimonExternalTable.class);
 
-    public PaimonExternalTable(long id, String name, String dbName, PaimonExternalCatalog catalog) {
-        super(id, name, catalog, dbName, TableType.PAIMON_EXTERNAL_TABLE);
+    public PaimonExternalTable(long id, String name, String remoteName, PaimonExternalCatalog catalog,
+            PaimonExternalDatabase db) {
+        super(id, name, remoteName, catalog, db, TableType.PAIMON_EXTERNAL_TABLE);
     }
 
     public String getPaimonCatalogType() {

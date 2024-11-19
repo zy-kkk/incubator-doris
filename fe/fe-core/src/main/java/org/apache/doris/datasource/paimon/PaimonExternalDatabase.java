@@ -23,12 +23,14 @@ import org.apache.doris.datasource.InitDatabaseLog;
 
 public class PaimonExternalDatabase extends ExternalDatabase<PaimonExternalTable> {
 
-    public PaimonExternalDatabase(ExternalCatalog extCatalog, Long id, String name) {
-        super(extCatalog, id, name, InitDatabaseLog.Type.PAIMON);
+    public PaimonExternalDatabase(ExternalCatalog extCatalog, Long id, String name, String remoteName) {
+        super(extCatalog, id, name, remoteName, InitDatabaseLog.Type.PAIMON);
     }
 
     @Override
-    protected PaimonExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog) {
-        return new PaimonExternalTable(tblId, tableName, name, (PaimonExternalCatalog) extCatalog);
+    public PaimonExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog,
+            ExternalDatabase db) {
+        return new PaimonExternalTable(tblId, tableName, tableName, (PaimonExternalCatalog) extCatalog,
+                (PaimonExternalDatabase) db);
     }
 }

@@ -26,6 +26,7 @@ import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.MetaNotFoundException;
+import org.apache.doris.common.Pair;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.io.Writable;
 import org.apache.doris.common.lock.MonitoredReentrantReadWriteLock;
@@ -76,6 +77,8 @@ public abstract class ExternalDatabase<T extends ExternalTable>
     protected long id;
     @SerializedName(value = "name")
     protected String name;
+    @SerializedName(value = "remoteName")
+    protected String remoteName;
     @SerializedName(value = "dbProperties")
     protected DatabaseProperty dbProperties = new DatabaseProperty();
     @SerializedName(value = "initialized")
@@ -100,11 +103,14 @@ public abstract class ExternalDatabase<T extends ExternalTable>
      * @param extCatalog The catalog this database belongs to.
      * @param id Database id.
      * @param name Database name.
+     * @param remoteName Remote database name.
      */
-    public ExternalDatabase(ExternalCatalog extCatalog, long id, String name, InitDatabaseLog.Type dbLogType) {
+    public ExternalDatabase(ExternalCatalog extCatalog, long id, String name, String remoteName,
+            InitDatabaseLog.Type dbLogType) {
         this.extCatalog = extCatalog;
         this.id = id;
         this.name = name;
+        this.remoteName = remoteName;
         this.dbLogType = dbLogType;
     }
 
@@ -144,16 +150,29 @@ public abstract class ExternalDatabase<T extends ExternalTable>
         if (!initialized) {
             if (extCatalog.getUseMetaCache().get()) {
                 if (metaCache == null) {
+                    List<Pair<String, String>> remoteToLocalPairs = listTableNames();
                     metaCache = Env.getCurrentEnv().getExtMetaCacheMgr().buildMetaCache(
                             name,
                             OptionalLong.of(86400L),
                             OptionalLong.of(Config.external_cache_expire_time_minutes_after_access * 60L),
                             Config.max_meta_object_cache_num,
-                            ignored -> listTableNames(),
-                            tableName -> Optional.ofNullable(
-                                    buildTableForInit(tableName,
-                                            Util.genIdByName(extCatalog.getName(), name, tableName), extCatalog)),
-                            (key, value, cause) -> value.ifPresent(ExternalTable::unsetObjectCreated));
+                            ignored -> remoteToLocalPairs.stream().map(Pair::value).collect(Collectors.toList()),
+                            tableName -> {
+                                Optional<Pair<String, String>> pairOpt = remoteToLocalPairs.stream()
+                                        .filter(pair -> pair.value().equals(tableName))
+                                        .findFirst();
+                                if (pairOpt.isPresent()) {
+                                    Pair<String, String> pair = pairOpt.get();
+                                    String remoteTableName = pair.key();
+                                    return Optional.ofNullable(
+                                            buildTableForInit(remoteTableName,
+                                                    Util.genIdByName(extCatalog.getName(), name, tableName), extCatalog,
+                                                    this));
+                                }
+                                return Optional.empty();
+                            },
+                            (key, value, cause) -> value.ifPresent(ExternalTable::unsetObjectCreated)
+                    );
                 }
                 setLastUpdateTime(System.currentTimeMillis());
             } else {
@@ -191,7 +210,8 @@ public abstract class ExternalDatabase<T extends ExternalTable>
             }
         }
         for (int i = 0; i < log.getCreateCount(); i++) {
-            T table = buildTableForInit(log.getCreateTableNames().get(i), log.getCreateTableIds().get(i), catalog);
+            T table =
+                    buildTableForInit(log.getCreateTableNames().get(i), log.getCreateTableIds().get(i), catalog, this);
             tmpTableNameToId.put(table.getName(), table.getId());
             tmpIdToTbl.put(table.getId(), table);
         }
@@ -206,24 +226,27 @@ public abstract class ExternalDatabase<T extends ExternalTable>
         initDatabaseLog.setType(dbLogType);
         initDatabaseLog.setCatalogId(extCatalog.getId());
         initDatabaseLog.setDbId(id);
-        List<String> tableNames = listTableNames();
-        if (tableNames != null) {
+        List<Pair<String, String>> tableNamePairs = listTableNames();
+        if (tableNamePairs != null) {
             Map<String, Long> tmpTableNameToId = Maps.newConcurrentMap();
             Map<Long, T> tmpIdToTbl = Maps.newHashMap();
-            for (String tableName : tableNames) {
+
+            for (Pair<String, String> pair : tableNamePairs) {
+                String remoteTableName = pair.first;
+                String localTableName = pair.second;
                 long tblId;
-                if (tableNameToId != null && tableNameToId.containsKey(tableName)) {
-                    tblId = tableNameToId.get(tableName);
-                    tmpTableNameToId.put(tableName, tblId);
+                if (tableNameToId != null && tableNameToId.containsKey(localTableName)) {
+                    tblId = tableNameToId.get(localTableName);
+                    tmpTableNameToId.put(localTableName, tblId);
                     T table = idToTbl.get(tblId);
                     tmpIdToTbl.put(tblId, table);
                     initDatabaseLog.addRefreshTable(tblId);
                 } else {
                     tblId = Env.getCurrentEnv().getNextId();
-                    tmpTableNameToId.put(tableName, tblId);
-                    T table = buildTableForInit(tableName, tblId, extCatalog);
+                    tmpTableNameToId.put(localTableName, tblId);
+                    T table = buildTableForInit(remoteTableName, tblId, extCatalog, this);
                     tmpIdToTbl.put(tblId, table);
-                    initDatabaseLog.addCreateTable(tblId, tableName);
+                    initDatabaseLog.addCreateTable(tblId, localTableName);
                 }
             }
             tableNameToId = tmpTableNameToId;
@@ -235,26 +258,27 @@ public abstract class ExternalDatabase<T extends ExternalTable>
         Env.getCurrentEnv().getEditLog().logInitExternalDb(initDatabaseLog);
     }
 
-    private List<String> listTableNames() {
-        List<String> tableNames;
+    private List<Pair<String, String>> listTableNames() {
+        List<Pair<String, String>> tableNames;
         if (name.equals(InfoSchemaDb.DATABASE_NAME)) {
-            tableNames = ExternalInfoSchemaDatabase.listTableNames();
+            tableNames = ExternalInfoSchemaDatabase.listTableNames().stream()
+                    .map(tableName -> Pair.of(tableName, tableName))
+                    .collect(Collectors.toList());
         } else if (name.equals(MysqlDb.DATABASE_NAME)) {
-            tableNames = ExternalMysqlDatabase.listTableNames();
+            tableNames = ExternalMysqlDatabase.listTableNames().stream()
+                    .map(tableName -> Pair.of(tableName, tableName))
+                    .collect(Collectors.toList());
         } else {
-            tableNames = extCatalog.listTableNames(null, name).stream().map(tableName -> {
+            tableNames = extCatalog.listTableNames(null, remoteName).stream().map(tableName -> {
                 lowerCaseToTableName.put(tableName.toLowerCase(), tableName);
-                if (Env.isStoredTableNamesLowerCase()) {
-                    return tableName.toLowerCase();
-                } else {
-                    return tableName;
-                }
+                String localTableName = extCatalog.fromRemoteTableName(remoteName, tableName);
+                return Pair.of(tableName, localTableName);
             }).collect(Collectors.toList());
         }
         return tableNames;
     }
 
-    protected abstract T buildTableForInit(String tableName, long tblId, ExternalCatalog catalog);
+    public abstract T buildTableForInit(String tableName, long tblId, ExternalCatalog catalog, ExternalDatabase db);
 
     public Optional<T> getTableForReplay(long tableId) {
         if (extCatalog.getUseMetaCache().get()) {
@@ -326,6 +350,10 @@ public abstract class ExternalDatabase<T extends ExternalTable>
     @Override
     public String getFullName() {
         return name;
+    }
+
+    public String getRemoteName() {
+        return remoteName;
     }
 
     @Override
@@ -528,7 +556,7 @@ public abstract class ExternalDatabase<T extends ExternalTable>
         } else {
             if (!tableNameToId.containsKey(tableName)) {
                 tableNameToId.put(tableName, tableId);
-                idToTbl.put(tableId, buildTableForInit(tableName, tableId, extCatalog));
+                idToTbl.put(tableId, buildTableForInit(tableName, tableId, extCatalog, this));
                 lowerCaseToTableName.put(tableName.toLowerCase(), tableName);
             }
         }

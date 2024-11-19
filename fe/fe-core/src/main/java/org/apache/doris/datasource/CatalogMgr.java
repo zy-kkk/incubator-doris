@@ -48,6 +48,7 @@ import org.apache.doris.common.util.PrintableMap;
 import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.common.util.Util;
 import org.apache.doris.datasource.hive.HMSExternalCatalog;
+import org.apache.doris.datasource.hive.HMSExternalDatabase;
 import org.apache.doris.datasource.hive.HMSExternalTable;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.persist.OperationType;
@@ -687,7 +688,8 @@ public class CatalogMgr implements Writable, GsonPostProcessable {
 
         db.writeLock();
         try {
-            HMSExternalTable namedTable = new HMSExternalTable(tblId, tableName, dbName, (HMSExternalCatalog) catalog);
+            HMSExternalTable namedTable = ((HMSExternalDatabase) db)
+                            .buildTableForInit(tableName, tblId, hmsCatalog, (HMSExternalDatabase) db);
             namedTable.setUpdateTime(updateTime);
             db.registerTable(namedTable);
         } finally {

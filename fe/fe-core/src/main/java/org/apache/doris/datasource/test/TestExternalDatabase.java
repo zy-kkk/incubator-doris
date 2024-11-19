@@ -23,12 +23,14 @@ import org.apache.doris.datasource.InitDatabaseLog;
 
 public class TestExternalDatabase extends ExternalDatabase<TestExternalTable> {
 
-    public TestExternalDatabase(ExternalCatalog extCatalog, long id, String name) {
-        super(extCatalog, id, name, InitDatabaseLog.Type.TEST);
+    public TestExternalDatabase(ExternalCatalog extCatalog, long id, String name, String remoteName) {
+        super(extCatalog, id, name, remoteName, InitDatabaseLog.Type.TEST);
     }
 
     @Override
-    protected TestExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog) {
-        return new TestExternalTable(tblId, tableName, name, (TestExternalCatalog) extCatalog);
+    public TestExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog,
+            ExternalDatabase db) {
+        return new TestExternalTable(tblId, tableName, tableName, (TestExternalCatalog) extCatalog,
+                (TestExternalDatabase) db);
     }
 }

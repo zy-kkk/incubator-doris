@@ -32,14 +32,17 @@ public class HMSExternalDatabase extends ExternalDatabase<HMSExternalTable> {
      * @param extCatalog External catalog this database belongs to.
      * @param id database id.
      * @param name database name.
+     * @param remoteName remote database name.
      */
-    public HMSExternalDatabase(ExternalCatalog extCatalog, long id, String name) {
-        super(extCatalog, id, name, InitDatabaseLog.Type.HMS);
+    public HMSExternalDatabase(ExternalCatalog extCatalog, long id, String name, String remoteName) {
+        super(extCatalog, id, name, remoteName, InitDatabaseLog.Type.HMS);
     }
 
     @Override
-    protected HMSExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog) {
-        return new HMSExternalTable(tblId, tableName, name, (HMSExternalCatalog) extCatalog);
+    public HMSExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog,
+            ExternalDatabase db) {
+        return new HMSExternalTable(tblId, tableName, tableName, (HMSExternalCatalog) extCatalog,
+                (HMSExternalDatabase) db);
     }
 
     public void addTableForTest(HMSExternalTable tbl) {

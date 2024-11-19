@@ -27,11 +27,15 @@ import org.apache.doris.common.DdlException;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.datasource.CatalogProperty;
 import org.apache.doris.datasource.ExternalCatalog;
+import org.apache.doris.datasource.ExternalDatabase;
+import org.apache.doris.datasource.ExternalTable;
 import org.apache.doris.datasource.InitCatalogLog;
 import org.apache.doris.datasource.SessionContext;
 import org.apache.doris.datasource.jdbc.client.JdbcClient;
 import org.apache.doris.datasource.jdbc.client.JdbcClientConfig;
 import org.apache.doris.datasource.jdbc.client.JdbcClientException;
+import org.apache.doris.datasource.mapping.IdentifierMapping;
+import org.apache.doris.datasource.mapping.JdbcIdentifierMapping;
 import org.apache.doris.proto.InternalService;
 import org.apache.doris.proto.InternalService.PJdbcTestConnectionRequest;
 import org.apache.doris.proto.InternalService.PJdbcTestConnectionResult;
@@ -55,6 +59,7 @@ import org.apache.thrift.TSerializer;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
@@ -71,6 +76,7 @@ public class JdbcExternalCatalog extends ExternalCatalog {
     // Must add "transient" for Gson to ignore this field,
     // or Gson will throw exception with HikariCP
     private transient JdbcClient jdbcClient;
+    private transient IdentifierMapping identifierMapping;
 
     public JdbcExternalCatalog(long catalogId, String name, String resource, Map<String, String> props,
             String comment)
@@ -119,12 +125,9 @@ public class JdbcExternalCatalog extends ExternalCatalog {
         super.onRefresh(invalidCache);
         if (jdbcClient != null) {
             jdbcClient.closeClient();
+            jdbcClient = null;
         }
-    }
-
-    @Override
-    public void onRefreshCache(boolean invalidCache) {
-        onRefresh(invalidCache);
+        identifierMapping = null;
     }
 
     @Override
@@ -132,7 +135,9 @@ public class JdbcExternalCatalog extends ExternalCatalog {
         super.onClose();
         if (jdbcClient != null) {
             jdbcClient.closeClient();
+            jdbcClient = null;
         }
+        identifierMapping = null;
     }
 
     protected Map<String, String> processCompatibleProperties(Map<String, String> props)
@@ -232,8 +237,6 @@ public class JdbcExternalCatalog extends ExternalCatalog {
                 .setDriverUrl(getDriverUrl())
                 .setDriverClass(getDriverClass())
                 .setOnlySpecifiedDatabase(getOnlySpecifiedDatabase())
-                .setIsLowerCaseMetaNames(getLowerCaseMetaNames())
-                .setMetaNamesMapping(getMetaNamesMapping())
                 .setIncludeDatabaseMap(getIncludeDatabaseMap())
                 .setExcludeDatabaseMap(getExcludeDatabaseMap())
                 .setConnectionPoolMinSize(getConnectionPoolMinSize())
@@ -243,10 +246,18 @@ public class JdbcExternalCatalog extends ExternalCatalog {
                 .setConnectionPoolKeepAlive(isConnectionPoolKeepAlive());
 
         jdbcClient = JdbcClient.createJdbcClient(jdbcClientConfig);
+        identifierMapping = new JdbcIdentifierMapping(Boolean.parseBoolean(getLowerCaseMetaNames()),
+                getMetaNamesMapping());
     }
 
-    protected List<String> listDatabaseNames() {
+    @Override
+    public List<String> listDatabaseNames() {
         return jdbcClient.getDatabaseNameList();
+    }
+
+    @Override
+    public String fromRemoteDatabaseName(String remoteDatabaseName) {
+        return identifierMapping.fromRemoteDatabaseName(remoteDatabaseName);
     }
 
     @Override
@@ -256,9 +267,22 @@ public class JdbcExternalCatalog extends ExternalCatalog {
     }
 
     @Override
+    public String fromRemoteTableName(String remoteDatabaseName, String remoteTableName) {
+        return identifierMapping.fromRemoteTableName(remoteDatabaseName, remoteTableName);
+    }
+
+    @Override
     public boolean tableExist(SessionContext ctx, String dbName, String tblName) {
         makeSureInitialized();
-        return jdbcClient.isTableExist(dbName, tblName);
+        ExternalTable tbl = Objects.requireNonNull(this.getDbNullable(dbName)).getTableNullable(tblName);
+        String remoteDbName = ((ExternalDatabase<?>) tbl.getDatabase()).getRemoteName();
+        String remoteTblName = tbl.getRemoteName();
+        return jdbcClient.isTableExist(remoteDbName, remoteTblName);
+    }
+
+    public List<Column> listColumns(String dbName, String tblName) {
+        makeSureInitialized();
+        return jdbcClient.getColumnsFromJdbc(dbName, tblName);
     }
 
     @Override

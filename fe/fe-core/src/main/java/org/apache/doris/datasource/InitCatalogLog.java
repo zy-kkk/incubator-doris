@@ -64,6 +64,9 @@ public class InitCatalogLog implements Writable {
     @SerializedName(value = "createDbNames")
     private List<String> createDbNames;
 
+    @SerializedName(value = "remoteDbNames")
+    private List<String> remoteDbNames;
+
     @SerializedName(value = "type")
     private Type type;
 
@@ -85,10 +88,11 @@ public class InitCatalogLog implements Writable {
         refreshDbIds.add(id);
     }
 
-    public void addCreateDb(long id, String name) {
+    public void addCreateDb(long id, String name, String remoteName) {
         createCount += 1;
         createDbIds.add(id);
         createDbNames.add(name);
+        remoteDbNames.add(remoteName);
     }
 
     @Override

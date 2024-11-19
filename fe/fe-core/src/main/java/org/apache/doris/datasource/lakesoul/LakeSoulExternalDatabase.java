@@ -23,13 +23,15 @@ import org.apache.doris.datasource.InitDatabaseLog;
 
 public class LakeSoulExternalDatabase extends ExternalDatabase<LakeSoulExternalTable> {
 
-    public LakeSoulExternalDatabase(ExternalCatalog extCatalog, long id, String name) {
-        super(extCatalog, id, name, InitDatabaseLog.Type.LAKESOUL);
+    public LakeSoulExternalDatabase(ExternalCatalog extCatalog, long id, String name, String remoteName) {
+        super(extCatalog, id, name, remoteName, InitDatabaseLog.Type.LAKESOUL);
     }
 
     @Override
-    protected LakeSoulExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog) {
-        return new LakeSoulExternalTable(tblId, tableName, name, (LakeSoulExternalCatalog) catalog);
+    public LakeSoulExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog,
+            ExternalDatabase db) {
+        return new LakeSoulExternalTable(tblId, tableName, tableName, (LakeSoulExternalCatalog) extCatalog,
+                (LakeSoulExternalDatabase) db);
     }
 }
 

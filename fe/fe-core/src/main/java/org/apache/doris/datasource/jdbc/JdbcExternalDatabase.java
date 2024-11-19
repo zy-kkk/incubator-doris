@@ -30,13 +30,17 @@ public class JdbcExternalDatabase extends ExternalDatabase<JdbcExternalTable> {
      * @param id database id.
      * @param name database name.
      */
-    public JdbcExternalDatabase(ExternalCatalog extCatalog, long id, String name) {
-        super(extCatalog, id, name, InitDatabaseLog.Type.JDBC);
+    public JdbcExternalDatabase(ExternalCatalog extCatalog, long id, String name, String remoteName) {
+        super(extCatalog, id, name, remoteName, InitDatabaseLog.Type.JDBC);
     }
 
     @Override
-    protected JdbcExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog) {
-        return new JdbcExternalTable(tblId, tableName, name, (JdbcExternalCatalog) extCatalog);
+    public JdbcExternalTable buildTableForInit(String tableName, long tblId, ExternalCatalog catalog,
+            ExternalDatabase db) {
+        String remoteDbName = this.getRemoteName();
+        String localTblName = extCatalog.fromRemoteTableName(remoteDbName, tableName);
+        return new JdbcExternalTable(tblId, localTblName, tableName, (JdbcExternalCatalog) extCatalog,
+                (JdbcExternalDatabase) db);
     }
 
     public void addTableForTest(JdbcExternalTable tbl) {

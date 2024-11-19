@@ -65,6 +65,8 @@ public class ExternalTable implements TableIf, Writable, GsonPostProcessable {
     protected long id;
     @SerializedName(value = "name")
     protected String name;
+    @SerializedName(value = "remoteName")
+    protected String remoteName;
     @SerializedName(value = "type")
     protected TableType type = null;
     @SerializedName(value = "timestamp")
@@ -80,6 +82,7 @@ public class ExternalTable implements TableIf, Writable, GsonPostProcessable {
     protected long dbId;
     protected boolean objectCreated;
     protected ExternalCatalog catalog;
+    protected ExternalDatabase db;
 
     /**
      * No args constructor for persist.
@@ -93,15 +96,19 @@ public class ExternalTable implements TableIf, Writable, GsonPostProcessable {
      *
      * @param id Table id.
      * @param name Table name.
+     * @param remoteName Remote table name.
      * @param catalog ExternalCatalog this table belongs to.
-     * @param dbName Name of the db the this table belongs to.
+     * @param db ExternalDatabase this table belongs to.
      * @param type Table type.
      */
-    public ExternalTable(long id, String name, ExternalCatalog catalog, String dbName, TableType type) {
+    public ExternalTable(long id, String name, String remoteName, ExternalCatalog catalog, ExternalDatabase db,
+            TableType type) {
         this.id = id;
         this.name = name;
+        this.remoteName = remoteName;
         this.catalog = catalog;
-        this.dbName = dbName;
+        this.db = db;
+        this.dbName = db.getFullName();
         this.type = type;
         this.objectCreated = false;
     }
@@ -133,6 +140,10 @@ public class ExternalTable implements TableIf, Writable, GsonPostProcessable {
     @Override
     public String getName() {
         return name;
+    }
+
+    public String getRemoteName() {
+        return remoteName;
     }
 
     @Override
