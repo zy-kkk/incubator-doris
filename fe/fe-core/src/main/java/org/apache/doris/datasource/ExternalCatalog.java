@@ -48,6 +48,7 @@ import org.apache.doris.datasource.infoschema.ExternalInfoSchemaDatabase;
 import org.apache.doris.datasource.infoschema.ExternalMysqlDatabase;
 import org.apache.doris.datasource.jdbc.JdbcExternalDatabase;
 import org.apache.doris.datasource.lakesoul.LakeSoulExternalDatabase;
+import org.apache.doris.datasource.mapping.IdentifierMapping;
 import org.apache.doris.datasource.maxcompute.MaxComputeExternalDatabase;
 import org.apache.doris.datasource.metacache.MetaCache;
 import org.apache.doris.datasource.operations.ExternalMetadataOps;
@@ -149,6 +150,7 @@ public abstract class ExternalCatalog
 
     protected Optional<Boolean> useMetaCache = Optional.empty();
     protected MetaCache<ExternalDatabase<? extends ExternalTable>> metaCache;
+    protected IdentifierMapping identifierMapping;
 
     public ExternalCatalog() {
     }
@@ -660,6 +662,10 @@ public abstract class ExternalCatalog
     }
 
     public void replayInitCatalog(InitCatalogLog log) {
+        if (log.getRemoteDbNames() == null || log.getRemoteDbNames().isEmpty()) {
+            initialized = false;
+            return;
+        }
         Map<String, Long> tmpDbNameToId = Maps.newConcurrentMap();
         Map<Long, ExternalDatabase<? extends ExternalTable>> tmpIdToDb = Maps.newConcurrentMap();
         for (int i = 0; i < log.getRefreshCount(); i++) {

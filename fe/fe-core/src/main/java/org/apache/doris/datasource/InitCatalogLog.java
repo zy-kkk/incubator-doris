@@ -80,6 +80,7 @@ public class InitCatalogLog implements Writable {
         refreshDbIds = Lists.newArrayList();
         createDbIds = Lists.newArrayList();
         createDbNames = Lists.newArrayList();
+        remoteDbNames = Lists.newArrayList();
         type = Type.UNKNOWN;
     }
 

@@ -34,7 +34,6 @@ import org.apache.doris.datasource.SessionContext;
 import org.apache.doris.datasource.jdbc.client.JdbcClient;
 import org.apache.doris.datasource.jdbc.client.JdbcClientConfig;
 import org.apache.doris.datasource.jdbc.client.JdbcClientException;
-import org.apache.doris.datasource.mapping.IdentifierMapping;
 import org.apache.doris.datasource.mapping.JdbcIdentifierMapping;
 import org.apache.doris.proto.InternalService;
 import org.apache.doris.proto.InternalService.PJdbcTestConnectionRequest;
@@ -57,6 +56,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.thrift.TException;
 import org.apache.thrift.TSerializer;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -76,13 +76,14 @@ public class JdbcExternalCatalog extends ExternalCatalog {
     // Must add "transient" for Gson to ignore this field,
     // or Gson will throw exception with HikariCP
     private transient JdbcClient jdbcClient;
-    private transient IdentifierMapping identifierMapping;
 
     public JdbcExternalCatalog(long catalogId, String name, String resource, Map<String, String> props,
             String comment)
             throws DdlException {
         super(catalogId, name, InitCatalogLog.Type.JDBC, comment);
         this.catalogProperty = new CatalogProperty(resource, processCompatibleProperties(props));
+        this.identifierMapping = new JdbcIdentifierMapping(Boolean.parseBoolean(getLowerCaseMetaNames()),
+                getMetaNamesMapping());
     }
 
     @Override
@@ -127,7 +128,8 @@ public class JdbcExternalCatalog extends ExternalCatalog {
             jdbcClient.closeClient();
             jdbcClient = null;
         }
-        identifierMapping = null;
+        this.identifierMapping = new JdbcIdentifierMapping(Boolean.parseBoolean(getLowerCaseMetaNames()),
+                getMetaNamesMapping());
     }
 
     @Override
@@ -137,7 +139,6 @@ public class JdbcExternalCatalog extends ExternalCatalog {
             jdbcClient.closeClient();
             jdbcClient = null;
         }
-        identifierMapping = null;
     }
 
     protected Map<String, String> processCompatibleProperties(Map<String, String> props)
@@ -246,8 +247,15 @@ public class JdbcExternalCatalog extends ExternalCatalog {
                 .setConnectionPoolKeepAlive(isConnectionPoolKeepAlive());
 
         jdbcClient = JdbcClient.createJdbcClient(jdbcClientConfig);
-        identifierMapping = new JdbcIdentifierMapping(Boolean.parseBoolean(getLowerCaseMetaNames()),
-                getMetaNamesMapping());
+    }
+
+    @Override
+    public void gsonPostProcess() throws IOException {
+        super.gsonPostProcess();
+        if (this.identifierMapping == null) {
+            identifierMapping = new JdbcIdentifierMapping(Boolean.parseBoolean(getLowerCaseMetaNames()),
+                    getMetaNamesMapping());
+        }
     }
 
     @Override
