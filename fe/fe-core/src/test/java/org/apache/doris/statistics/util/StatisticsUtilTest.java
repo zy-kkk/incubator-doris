@@ -30,9 +30,11 @@ import org.apache.doris.common.util.PropertyAnalyzer;
 import org.apache.doris.datasource.ExternalCatalog;
 import org.apache.doris.datasource.ExternalTable;
 import org.apache.doris.datasource.hive.HMSExternalCatalog;
+import org.apache.doris.datasource.hive.HMSExternalDatabase;
 import org.apache.doris.datasource.hive.HMSExternalTable;
 import org.apache.doris.datasource.hive.HMSExternalTable.DLAType;
 import org.apache.doris.datasource.jdbc.JdbcExternalCatalog;
+import org.apache.doris.datasource.jdbc.JdbcExternalDatabase;
 import org.apache.doris.datasource.jdbc.JdbcExternalTable;
 import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.statistics.AnalysisManager;
@@ -180,6 +182,11 @@ class StatisticsUtilTest {
         OlapTable table = new OlapTable(200, "testTable", schema, null, null, null);
         HMSExternalCatalog externalCatalog = new HMSExternalCatalog();
 
+        long dbId = 100;
+        String dbName = "testDb";
+        HMSExternalDatabase externalDatabase = new HMSExternalDatabase(externalCatalog, dbId, dbName, dbName);
+
+
         // Test olap table auto analyze disabled.
         Map<String, String> properties = new HashMap<>();
         properties.put(PropertyAnalyzer.PROPERTIES_AUTO_ANALYZE_POLICY, "disable");
@@ -194,7 +201,7 @@ class StatisticsUtilTest {
         };
 
         // Test auto analyze catalog disabled.
-        HMSExternalTable hmsTable = new HMSExternalTable(1, "name", "dbName", externalCatalog);
+        HMSExternalTable hmsTable = new HMSExternalTable(1, "name", "name", externalCatalog, externalDatabase);
         Assertions.assertFalse(StatisticsUtil.needAnalyzeColumn(hmsTable, Pair.of("index", column.getName())));
 
         // Test catalog auto analyze enabled.
@@ -215,7 +222,7 @@ class StatisticsUtilTest {
             }
         };
         externalCatalog.getCatalogProperty().addProperty(ExternalCatalog.ENABLE_AUTO_ANALYZE, "false");
-        HMSExternalTable hmsTable1 = new HMSExternalTable(1, "name", "dbName", externalCatalog);
+        HMSExternalTable hmsTable1 = new HMSExternalTable(1, "name", "name", externalCatalog, externalDatabase);
         externalCatalog.setAutoAnalyzePolicy("dbName", "name", "enable");
         Assertions.assertTrue(StatisticsUtil.needAnalyzeColumn(hmsTable1, Pair.of("index", column.getName())));
 
@@ -268,8 +275,9 @@ class StatisticsUtilTest {
             }
         };
         // Test not supported external table type.
-        ExternalTable externalTable = new JdbcExternalTable(1, "jdbctable", "jdbcdb",
-                new JdbcExternalCatalog(1, "name", "resource", new HashMap<>(), ""));
+        JdbcExternalCatalog jdbcExternalCatalog = new JdbcExternalCatalog(1, "name", "resource", new HashMap<>(), "");
+        JdbcExternalDatabase jdbcExternalDatabase = new JdbcExternalDatabase(jdbcExternalCatalog, 1, "jdbcdb", "jdbcdb");
+        ExternalTable externalTable = new JdbcExternalTable(1, "jdbctable", "jdbctable", jdbcExternalCatalog, jdbcExternalDatabase);
         Assertions.assertFalse(StatisticsUtil.needAnalyzeColumn(externalTable, Pair.of("index", column.getName())));
 
         // Test hms external table not hive type.
@@ -279,7 +287,7 @@ class StatisticsUtilTest {
                 return DLAType.ICEBERG;
             }
         };
-        ExternalTable hmsExternalTable = new HMSExternalTable(1, "hmsTable", "hmsDb", externalCatalog);
+        ExternalTable hmsExternalTable = new HMSExternalTable(1, "hmsTable", "hmsTable", externalCatalog, externalDatabase);
         Assertions.assertFalse(StatisticsUtil.needAnalyzeColumn(hmsExternalTable, Pair.of("index", column.getName())));
 
         // Test partition first load.
