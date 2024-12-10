@@ -48,6 +48,7 @@ import org.apache.doris.common.util.PrintableMap;
 import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.common.util.Util;
 import org.apache.doris.datasource.hive.HMSExternalCatalog;
+import org.apache.doris.datasource.hive.HMSExternalDatabase;
 import org.apache.doris.datasource.hive.HMSExternalTable;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.persist.OperationType;
@@ -661,8 +662,8 @@ public class CatalogMgr implements Writable, GsonPostProcessable {
     }
 
     public void registerExternalTableFromEvent(String dbName, String tableName,
-                                               String catalogName, long updateTime,
-                                               boolean ignoreIfExists) throws DdlException {
+            String catalogName, long updateTime,
+            boolean ignoreIfExists) throws DdlException {
         CatalogIf catalog = nameToCatalog.get(catalogName);
         if (catalog == null) {
             throw new DdlException("No catalog found with name: " + catalogName);
@@ -692,7 +693,8 @@ public class CatalogMgr implements Writable, GsonPostProcessable {
 
         db.writeLock();
         try {
-            HMSExternalTable namedTable = new HMSExternalTable(tblId, tableName, dbName, (HMSExternalCatalog) catalog);
+            HMSExternalTable namedTable = ((HMSExternalDatabase) db)
+                    .buildTableForInit(tableName, tableName, tblId, hmsCatalog, (HMSExternalDatabase) db, false);
             namedTable.setUpdateTime(updateTime);
             db.registerTable(namedTable);
         } finally {
@@ -738,7 +740,7 @@ public class CatalogMgr implements Writable, GsonPostProcessable {
     }
 
     public void addExternalPartitions(String catalogName, String dbName, String tableName,
-                                      List<String> partitionNames, long updateTime, boolean ignoreIfNotExists)
+            List<String> partitionNames, long updateTime, boolean ignoreIfNotExists)
             throws DdlException {
         CatalogIf catalog = nameToCatalog.get(catalogName);
         if (catalog == null) {
@@ -773,7 +775,7 @@ public class CatalogMgr implements Writable, GsonPostProcessable {
     }
 
     public void dropExternalPartitions(String catalogName, String dbName, String tableName,
-                                       List<String> partitionNames, long updateTime, boolean ignoreIfNotExists)
+            List<String> partitionNames, long updateTime, boolean ignoreIfNotExists)
             throws DdlException {
         CatalogIf catalog = nameToCatalog.get(catalogName);
         if (catalog == null) {
