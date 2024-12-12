@@ -67,13 +67,15 @@ suite("test_meta_names_mapping", "p0,external,doris,meta_names_mapping") {
 
     sql """drop catalog if exists test_valid_meta_names_mapping """
     sql """ CREATE CATALOG `test_valid_meta_names_mapping` PROPERTIES (
-        "user" = "${jdbcUser}",
-        "type" = "jdbc",
-        "password" = "${jdbcPassword}",
-        "jdbc_url" = "${jdbcUrl}",
-        "driver_url" = "${driver_url}",
-        "driver_class" = "com.mysql.cj.jdbc.Driver",
-        "meta_names_mapping" = '${validMetaNamesMapping}'
+            "user" = "${jdbcUser}",
+            "type" = "jdbc",
+            "password" = "${jdbcPassword}",
+            "jdbc_url" = "${jdbcUrl}",
+            "driver_url" = "${driver_url}",
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "only_specified_database" = "true",
+            "include_database_list" = "external_meta_names_mapping,EXTERNAL_META_NAMES_MAPPING",
+            "meta_names_mapping" = '${validMetaNamesMapping}'
         )"""
 
     test {
@@ -111,16 +113,17 @@ suite("test_meta_names_mapping", "p0,external,doris,meta_names_mapping") {
 
     sql """drop catalog if exists test_valid_meta_names_mapping """
 
-    // 测试冲突的远程名称在 lower_case_meta_names 为 true 时是否会报错
     sql """ drop catalog if exists test_conflict_meta_names """
     sql """ CREATE CATALOG `test_conflict_meta_names` PROPERTIES (
-        "user" = "${jdbcUser}",
-        "type" = "jdbc",
-        "password" = "${jdbcPassword}",
-        "jdbc_url" = "${jdbcUrl}",
-        "driver_url" = "${driver_url}",
-        "driver_class" = "com.mysql.cj.jdbc.Driver",
-        "lower_case_meta_names" = "true"
+            "user" = "${jdbcUser}",
+            "type" = "jdbc",
+            "password" = "${jdbcPassword}",
+            "jdbc_url" = "${jdbcUrl}",
+            "driver_url" = "${driver_url}",
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "lower_case_meta_names" = "true",
+            "only_specified_database" = "true",
+            "include_database_list" = "external_meta_names_mapping,EXTERNAL_META_NAMES_MAPPING"
         )"""
 
     test {
@@ -195,6 +198,34 @@ suite("test_meta_names_mapping", "p0,external,doris,meta_names_mapping") {
 
     qt_sql_meta_mapping_select_lower_lower_case_true "select * from test_conflict_meta_names.external_meta_names_mapping_lower.table_test_lower"
     qt_sql_meta_mapping_select_upper_lower_case_true "select * from test_conflict_meta_names.external_meta_names_mapping_lower.table_test_upper"
+
+    String error_mapping_db = """
+    {
+        "databases": [
+            {"remoteDatabase": "EXTERNAL_META_NAMES_MAPPING", "mapping": "external_meta_names_mapping_upper"},
+            {"remoteDatabase": "EXTERNAL_META_NAMES_MAPPING", "mapping": "external_meta_names_mapping_lower"}
+        ],
+        "tables": [
+            {"remoteDatabase": "external_meta_names_mapping", "remoteTable": "table_test", "mapping": "table_test_lower"},
+            {"remoteDatabase": "external_meta_names_mapping", "remoteTable": "TABLE_TEST", "mapping": "table_test_upper"}
+        ],
+        "columns": [
+            {"remoteDatabase": "external_meta_names_mapping", "remoteTable": "TABLE_TEST", "remoteColumn": "column_test", "mapping": "column_test_local"}
+        ]
+    }
+    """
+
+    sql """ CREATE CATALOG `test_valid_meta_names_mapping` PROPERTIES (
+            "user" = "${jdbcUser}",
+            "type" = "jdbc",
+            "password" = "${jdbcPassword}",
+            "jdbc_url" = "${jdbcUrl}",
+            "driver_url" = "${driver_url}",
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "only_specified_database" = "true",
+            "include_database_list" = "external_meta_names_mapping,EXTERNAL_META_NAMES_MAPPING",
+            "meta_names_mapping" = '${validMetaNamesMapping}'
+        )"""
 
     sql """drop database if exists internal.external_meta_names_mapping; """
     sql """drop database if exists internal.EXTERNAL_META_NAMES_MAPPING; """

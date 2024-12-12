@@ -47,14 +47,16 @@ suite("test_lower_case_meta_show_and_select", "p0,external,doris,external_docker
     sql """drop catalog if exists test_cache_false_lower_false """
 
     sql """ CREATE CATALOG `test_cache_false_lower_false` PROPERTIES (
-        "user" = "${jdbcUser}",
-        "type" = "jdbc",
-        "password" = "${jdbcPassword}",
-        "jdbc_url" = "${jdbcUrl}",
-        "driver_url" = "${driver_url}",
-        "driver_class" = "com.mysql.cj.jdbc.Driver",
-        "use_meta_cache" = "false",
-        "lower_case_meta_names" = "false"
+            "user" = "${jdbcUser}",
+            "type" = "jdbc",
+            "password" = "${jdbcPassword}",
+            "jdbc_url" = "${jdbcUrl}",
+            "driver_url" = "${driver_url}",
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "use_meta_cache" = "false",
+            "lower_case_meta_names" = "false",
+            "only_specified_database" = "true",
+            "include_database_list" = "external_test_lower,external_test_UPPER"
         )"""
 
     test {
@@ -90,14 +92,16 @@ suite("test_lower_case_meta_show_and_select", "p0,external,doris,external_docker
     sql """drop catalog if exists test_cache_true_lower_false """
 
     sql """ CREATE CATALOG `test_cache_true_lower_false` PROPERTIES (
-        "user" = "${jdbcUser}",
-        "type" = "jdbc",
-        "password" = "${jdbcPassword}",
-        "jdbc_url" = "${jdbcUrl}",
-        "driver_url" = "${driver_url}",
-        "driver_class" = "com.mysql.cj.jdbc.Driver",
-        "use_meta_cache" = "true",
-        "lower_case_meta_names" = "false"
+            "user" = "${jdbcUser}",
+            "type" = "jdbc",
+            "password" = "${jdbcPassword}",
+            "jdbc_url" = "${jdbcUrl}",
+            "driver_url" = "${driver_url}",
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "use_meta_cache" = "true",
+            "lower_case_meta_names" = "false",
+            "only_specified_database" = "true",
+            "include_database_list" = "external_test_lower,external_test_UPPER"
         )"""
 
     test {
@@ -133,14 +137,16 @@ suite("test_lower_case_meta_show_and_select", "p0,external,doris,external_docker
     sql """drop catalog if exists test_cache_false_lower_true """
 
     sql """ CREATE CATALOG `test_cache_false_lower_true` PROPERTIES (
-        "user" = "${jdbcUser}",
-        "type" = "jdbc",
-        "password" = "${jdbcPassword}",
-        "jdbc_url" = "${jdbcUrl}",
-        "driver_url" = "${driver_url}",
-        "driver_class" = "com.mysql.cj.jdbc.Driver",
-        "use_meta_cache" = "false",
-        "lower_case_meta_names" = "true"
+            "user" = "${jdbcUser}",
+            "type" = "jdbc",
+            "password" = "${jdbcPassword}",
+            "jdbc_url" = "${jdbcUrl}",
+            "driver_url" = "${driver_url}",
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "use_meta_cache" = "false",
+            "lower_case_meta_names" = "true",
+            "only_specified_database" = "true",
+            "include_database_list" = "external_test_lower,external_test_UPPER"
         )"""
 
     test {
@@ -176,14 +182,16 @@ suite("test_lower_case_meta_show_and_select", "p0,external,doris,external_docker
     sql """drop catalog if exists test_cache_true_lower_true """
 
     sql """ CREATE CATALOG `test_cache_true_lower_true` PROPERTIES (
-        "user" = "${jdbcUser}",
-        "type" = "jdbc",
-        "password" = "${jdbcPassword}",
-        "jdbc_url" = "${jdbcUrl}",
-        "driver_url" = "${driver_url}",
-        "driver_class" = "com.mysql.cj.jdbc.Driver",
-        "use_meta_cache" = "true",
-        "lower_case_meta_names" = "true"
+            "user" = "${jdbcUser}",
+            "type" = "jdbc",
+            "password" = "${jdbcPassword}",
+            "jdbc_url" = "${jdbcUrl}",
+            "driver_url" = "${driver_url}",
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "use_meta_cache" = "true",
+            "lower_case_meta_names" = "true",
+            "only_specified_database" = "true",
+            "include_database_list" = "external_test_lower,external_test_UPPER"
         )"""
 
     test {

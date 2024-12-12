@@ -108,10 +108,10 @@ enableBrokerLoad=true
 // for s3 releated cases, "aliyun" or "aliyun-internal" or "tencent" or "huawei" or "azure" or "gcp"
 // if s3Source is set,  s3Endpoint s3BucketName s3Region s3Provider will be filled with default value if not set
 s3Source="aliyun"
-// s3Endpoint = ""
-// s3BucketName = ""
-// s3Region = ""
-// s3Provider = ""
+s3Endpoint = "oss-cn-beijing.aliyuncs.com"
+s3BucketName = "doris-regression-bj"
+s3Region = "cn-beijing"
+s3Provider = "Aliyun"
 ak="***********"
 sk="***********"
 

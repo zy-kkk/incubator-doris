@@ -43,7 +43,9 @@ suite("test_lower_case_mtmv", "p0,external,doris,external_docker,external_docker
             "jdbc_url" = "${jdbcUrl}",
             "driver_url" = "${driver_url}",
             "driver_class" = "com.mysql.cj.jdbc.Driver",
-            "lower_case_meta_names" = "true"
+            "lower_case_meta_names" = "true",
+            "only_specified_database" = "true",
+            "include_database_list" = "EXTERNAL_LOWER_MTMV"
         )"""
 
 
