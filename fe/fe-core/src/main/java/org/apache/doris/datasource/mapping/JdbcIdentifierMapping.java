@@ -131,9 +131,16 @@ public class JdbcIdentifierMapping implements IdentifierMapping {
             Map<String, Map<String, Set<String>>> tableMappingCheck = Maps.newHashMap();
             Map<String, Map<String, Map<String, Set<String>>>> columnMappingCheck = Maps.newHashMap();
 
-            validateNode(rootNode.path("databases"), "databases", duplicateErrors, dbMappingCheck, null, null);
-            validateNode(rootNode.path("tables"), "tables", duplicateErrors, null, tableMappingCheck, null);
-            validateNode(rootNode.path("columns"), "columns", duplicateErrors, null, null, columnMappingCheck);
+            Set<String> dbKeySet = Sets.newHashSet();
+            Map<String, Set<String>> tableKeySet = Maps.newHashMap();
+            Map<String, Map<String, Set<String>>> columnKeySet = Maps.newHashMap();
+
+            validateNode(rootNode.path("databases"), "databases", duplicateErrors, dbMappingCheck, tableMappingCheck,
+                    columnMappingCheck, dbKeySet, tableKeySet, columnKeySet);
+            validateNode(rootNode.path("tables"), "tables", duplicateErrors, dbMappingCheck, tableMappingCheck,
+                    columnMappingCheck, dbKeySet, tableKeySet, columnKeySet);
+            validateNode(rootNode.path("columns"), "columns", duplicateErrors, dbMappingCheck, tableMappingCheck,
+                    columnMappingCheck, dbKeySet, tableKeySet, columnKeySet);
 
             if (!duplicateErrors.isEmpty()) {
                 StringBuilder errorBuilder = new StringBuilder("Duplicate mapping found:\n");
@@ -153,7 +160,10 @@ public class JdbcIdentifierMapping implements IdentifierMapping {
             Map<String, Set<String>> duplicateErrors,
             Map<String, Set<String>> dbMappingCheck,
             Map<String, Map<String, Set<String>>> tableMappingCheck,
-            Map<String, Map<String, Map<String, Set<String>>>> columnMappingCheck) {
+            Map<String, Map<String, Map<String, Set<String>>>> columnMappingCheck,
+            Set<String> dbKeySet,
+            Map<String, Set<String>> tableKeySet,
+            Map<String, Map<String, Set<String>>> columnKeySet) {
         Map<String, String> mappingSet = Maps.newHashMap();
         if (nodes.isArray()) {
             for (JsonNode node : nodes) {
@@ -163,19 +173,23 @@ public class JdbcIdentifierMapping implements IdentifierMapping {
                 switch (nodeType) {
                     case "databases":
                         remoteKey = node.path("remoteDatabase").asText();
+                        checkDuplicateRemoteDatabaseKey(remoteKey, dbKeySet, duplicateErrors);
                         break;
                     case "tables":
                         remoteDb = node.path("remoteDatabase").asText();
                         remoteKey = node.path("remoteTable").asText();
+                        checkDuplicateRemoteTableKey(remoteDb, remoteKey, tableKeySet, duplicateErrors);
                         break;
                     case "columns":
                         remoteDb = node.path("remoteDatabase").asText();
                         remoteTbl = node.path("remoteTable").asText();
                         remoteKey = node.path("remoteColumn").asText();
+                        checkDuplicateRemoteColumnKey(remoteDb, remoteTbl, remoteKey, columnKeySet, duplicateErrors);
                         break;
                     default:
                         throw new IllegalArgumentException("Unknown type: " + nodeType);
                 }
+
                 String mapping = node.path("mapping").asText();
 
                 String existed = mappingSet.get(mapping);
@@ -196,8 +210,8 @@ public class JdbcIdentifierMapping implements IdentifierMapping {
                         break;
                     case "tables":
                         if (isLowerCaseMetaNames || isLowerCaseTableNames) {
-                            checkCaseConflictForTable(remoteDb, mapping, tableMappingCheck, duplicateErrors, nodeType,
-                                    remoteKey);
+                            checkCaseConflictForTable(remoteDb, mapping, tableMappingCheck, duplicateErrors,
+                                    nodeType, remoteKey);
                         }
                         break;
                     case "columns":
@@ -208,6 +222,52 @@ public class JdbcIdentifierMapping implements IdentifierMapping {
                         break;
                 }
             }
+        }
+    }
+
+    private void checkDuplicateRemoteDatabaseKey(String remoteDatabase,
+            Set<String> dbKeySet,
+            Map<String, Set<String>> duplicateErrors) {
+        if (dbKeySet == null) {
+            return;
+        }
+        if (!dbKeySet.add(remoteDatabase)) {
+            duplicateErrors
+                    .computeIfAbsent("databases", k -> Sets.newLinkedHashSet())
+                    .add(String.format("Duplicate remoteDatabase found: %s", remoteDatabase));
+        }
+    }
+
+    private void checkDuplicateRemoteTableKey(String remoteDb,
+            String remoteTable,
+            Map<String, Set<String>> tableKeySet,
+            Map<String, Set<String>> duplicateErrors) {
+        if (tableKeySet == null) {
+            return;
+        }
+        Set<String> tables = tableKeySet.computeIfAbsent(remoteDb, k -> Sets.newHashSet());
+        if (!tables.add(remoteTable)) {
+            duplicateErrors
+                    .computeIfAbsent("tables", k -> Sets.newLinkedHashSet())
+                    .add(String.format("Duplicate remoteTable found in database %s: %s", remoteDb, remoteTable));
+        }
+    }
+
+    private void checkDuplicateRemoteColumnKey(String remoteDb,
+            String remoteTbl,
+            String remoteColumn,
+            Map<String, Map<String, Set<String>>> columnKeySet,
+            Map<String, Set<String>> duplicateErrors) {
+        if (columnKeySet == null) {
+            return;
+        }
+        Map<String, Set<String>> tblMap = columnKeySet.computeIfAbsent(remoteDb, k -> Maps.newHashMap());
+        Set<String> columns = tblMap.computeIfAbsent(remoteTbl, k -> Sets.newHashSet());
+        if (!columns.add(remoteColumn)) {
+            duplicateErrors
+                    .computeIfAbsent("columns", k -> Sets.newLinkedHashSet())
+                    .add(String.format("Duplicate remoteColumn found in database %s, table %s: %s",
+                            remoteDb, remoteTbl, remoteColumn));
         }
     }
 

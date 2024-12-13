@@ -204,18 +204,14 @@ suite("test_meta_names_mapping", "p0,external,doris,meta_names_mapping") {
         "databases": [
             {"remoteDatabase": "EXTERNAL_META_NAMES_MAPPING", "mapping": "external_meta_names_mapping_upper"},
             {"remoteDatabase": "EXTERNAL_META_NAMES_MAPPING", "mapping": "external_meta_names_mapping_lower"}
-        ],
-        "tables": [
-            {"remoteDatabase": "external_meta_names_mapping", "remoteTable": "table_test", "mapping": "table_test_lower"},
-            {"remoteDatabase": "external_meta_names_mapping", "remoteTable": "TABLE_TEST", "mapping": "table_test_upper"}
-        ],
-        "columns": [
-            {"remoteDatabase": "external_meta_names_mapping", "remoteTable": "TABLE_TEST", "remoteColumn": "column_test", "mapping": "column_test_local"}
         ]
     }
     """
 
-    sql """ CREATE CATALOG `test_valid_meta_names_mapping` PROPERTIES (
+    sql """drop catalog if exists test_error_mapping_db """
+
+    test {
+        sql """ CREATE CATALOG `test_error_mapping_db` PROPERTIES (
             "user" = "${jdbcUser}",
             "type" = "jdbc",
             "password" = "${jdbcPassword}",
@@ -224,8 +220,67 @@ suite("test_meta_names_mapping", "p0,external,doris,meta_names_mapping") {
             "driver_class" = "com.mysql.cj.jdbc.Driver",
             "only_specified_database" = "true",
             "include_database_list" = "external_meta_names_mapping,EXTERNAL_META_NAMES_MAPPING",
-            "meta_names_mapping" = '${validMetaNamesMapping}'
+            "meta_names_mapping" = '${error_mapping_db}'
         )"""
+
+        exception "Duplicate remoteDatabase found: EXTERNAL_META_NAMES_MAPPING"
+    }
+
+    sql """drop catalog if exists test_error_mapping_db """
+
+    String error_mapping_tbl = """
+    {
+        "tables": [
+            {"remoteDatabase": "external_meta_names_mapping", "remoteTable": "TABLE_TEST", "mapping": "table_test_upper"},
+            {"remoteDatabase": "external_meta_names_mapping", "remoteTable": "TABLE_TEST", "mapping": "table_test_lower"}
+        ]
+    }
+    """
+
+    sql """drop catalog if exists test_error_mapping_tbl """
+
+    test {
+        sql """ CREATE CATALOG `test_error_mapping_tbl` PROPERTIES (
+            "user" = "${jdbcUser}",
+            "type" = "jdbc",
+            "password" = "${jdbcPassword}",
+            "jdbc_url" = "${jdbcUrl}",
+            "driver_url" = "${driver_url}",
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "only_specified_database" = "true",
+            "include_database_list" = "external_meta_names_mapping,EXTERNAL_META_NAMES_MAPPING",
+            "meta_names_mapping" = '${error_mapping_tbl}'
+        )"""
+
+        exception "Duplicate remoteTable found in database external_meta_names_mapping: TABLE_TEST"
+    }
+
+    sql """drop catalog if exists test_error_mapping_tbl """
+
+    sql """drop catalog if exists test_alter_error_mapping """
+
+    sql """ CREATE CATALOG `test_alter_error_mapping` PROPERTIES (
+        "user" = "${jdbcUser}",
+        "type" = "jdbc",
+        "password" = "${jdbcPassword}",
+        "jdbc_url" = "${jdbcUrl}",
+        "driver_url" = "${driver_url}",
+        "driver_class" = "com.mysql.cj.jdbc.Driver",
+        "only_specified_database" = "true",
+        "include_database_list" = "external_meta_names_mapping,EXTERNAL_META_NAMES_MAPPING"
+    )"""
+
+    test {
+        sql """alter catalog test_alter_error_mapping set properties('meta_names_mapping' = '${error_mapping_db}')"""
+        exception "Duplicate remoteDatabase found: EXTERNAL_META_NAMES_MAPPING"
+    }
+
+    test {
+        sql """alter catalog test_alter_error_mapping set properties('meta_names_mapping' = '${error_mapping_tbl}')"""
+        exception "Duplicate remoteTable found in database external_meta_names_mapping: TABLE_TEST"
+    }
+
+    sql """drop catalog if exists test_alter_error_mapping """
 
     sql """drop database if exists internal.external_meta_names_mapping; """
     sql """drop database if exists internal.EXTERNAL_META_NAMES_MAPPING; """
