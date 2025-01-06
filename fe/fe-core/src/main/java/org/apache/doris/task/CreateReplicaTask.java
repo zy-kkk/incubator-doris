@@ -31,6 +31,7 @@ import org.apache.doris.policy.PolicyTypeEnum;
 import org.apache.doris.thrift.TColumn;
 import org.apache.doris.thrift.TCompressionType;
 import org.apache.doris.thrift.TCreateTabletReq;
+import org.apache.doris.thrift.TInvertedIndexFileStorageFormat;
 import org.apache.doris.thrift.TInvertedIndexStorageFormat;
 import org.apache.doris.thrift.TOlapTableIndex;
 import org.apache.doris.thrift.TStatusCode;
@@ -64,6 +65,8 @@ public class CreateReplicaTask extends AgentTask {
     private TStorageType storageType;
     private TStorageMedium storageMedium;
     private TCompressionType compressionType;
+    private long rowStorePageSize;
+    private long storagePageSize;
 
     private List<Column> columns;
 
@@ -91,7 +94,7 @@ public class CreateReplicaTask extends AgentTask {
     // TODO should unify the naming of v1(alpha rowset), v2(beta rowset), it is very confused to read code
     private TStorageFormat storageFormat = TStorageFormat.V2;
 
-    private TInvertedIndexStorageFormat invertedIndexStorageFormat = TInvertedIndexStorageFormat.V1;
+    private TInvertedIndexFileStorageFormat invertedIndexFileStorageFormat = TInvertedIndexFileStorageFormat.V2;
 
     // true if this task is created by recover request(See comment of Config.recover_with_empty_tablet)
     private boolean isRecoverTask = false;
@@ -122,10 +125,12 @@ public class CreateReplicaTask extends AgentTask {
     private boolean storeRowColumn;
 
     private BinlogConfig binlogConfig;
-    private List<Integer> clusterKeyIndexes;
+    private List<Integer> clusterKeyUids;
 
     private Map<Object, Object> objectPool;
     private List<Integer> rowStoreColumnUniqueIds;
+
+    private boolean variantEnableFlattenNested;
 
     public CreateReplicaTask(long backendId, long dbId, long tableId, long partitionId, long indexId, long tabletId,
                              long replicaId, short shortKeyColumnCount, int schemaHash, long version,
@@ -150,7 +155,10 @@ public class CreateReplicaTask extends AgentTask {
                              boolean storeRowColumn,
                              BinlogConfig binlogConfig,
                              List<Integer> rowStoreColumnUniqueIds,
-                             Map<Object, Object> objectPool) {
+                             Map<Object, Object> objectPool,
+                             long rowStorePageSize,
+                             boolean variantEnableFlattenNested,
+                             long storagePageSize) {
         super(null, backendId, TTaskType.CREATE, dbId, tableId, partitionId, indexId, tabletId);
 
         this.replicaId = replicaId;
@@ -196,6 +204,9 @@ public class CreateReplicaTask extends AgentTask {
         this.storeRowColumn = storeRowColumn;
         this.binlogConfig = binlogConfig;
         this.objectPool = objectPool;
+        this.rowStorePageSize = rowStorePageSize;
+        this.variantEnableFlattenNested = variantEnableFlattenNested;
+        this.storagePageSize = storagePageSize;
     }
 
     public void setIsRecoverTask(boolean isRecoverTask) {
@@ -227,6 +238,23 @@ public class CreateReplicaTask extends AgentTask {
         }
     }
 
+    @Override
+    public void failedWithMsg(String errMsg) {
+        super.failedWithMsg(errMsg);
+
+        // CreateReplicaTask will not trigger a retry in ReportTask. Therefore, it needs to
+        // be marked as failed here and all threads waiting for the result of
+        // CreateReplicaTask need to be awakened.
+        if (this.latch != null) {
+            Status s = new Status(TStatusCode.CANCELLED, errMsg);
+            latch.markedCountDownWithStatus(getBackendId(), getTabletId(), s);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("CreateReplicaTask failed with msg: {}, tablet: {}, backend: {}",
+                        errMsg, getTabletId(), getBackendId());
+            }
+        }
+    }
+
     public void setLatch(MarkedCountDownLatch<Long, Long> latch) {
         this.latch = latch;
     }
@@ -244,12 +272,12 @@ public class CreateReplicaTask extends AgentTask {
         this.storageFormat = storageFormat;
     }
 
-    public void setInvertedIndexStorageFormat(TInvertedIndexStorageFormat invertedIndexStorageFormat) {
-        this.invertedIndexStorageFormat = invertedIndexStorageFormat;
+    public void setInvertedIndexFileStorageFormat(TInvertedIndexFileStorageFormat invertedIndexFileStorageFormat) {
+        this.invertedIndexFileStorageFormat = invertedIndexFileStorageFormat;
     }
 
-    public void setClusterKeyIndexes(List<Integer> clusterKeyIndexes) {
-        this.clusterKeyIndexes = clusterKeyIndexes;
+    public void setClusterKeyUids(List<Integer> clusterKeyUids) {
+        this.clusterKeyUids = clusterKeyUids;
     }
 
     public TCreateTabletReq toThrift() {
@@ -309,10 +337,10 @@ public class CreateReplicaTask extends AgentTask {
         tSchema.setSequenceColIdx(sequenceCol);
         tSchema.setVersionColIdx(versionCol);
         tSchema.setRowStoreColCids(rowStoreColumnUniqueIds);
-        if (!CollectionUtils.isEmpty(clusterKeyIndexes)) {
-            tSchema.setClusterKeyIdxes(clusterKeyIndexes);
+        if (!CollectionUtils.isEmpty(clusterKeyUids)) {
+            tSchema.setClusterKeyUids(clusterKeyUids);
             if (LOG.isDebugEnabled()) {
-                LOG.debug("cluster key index={}, table_id={}, tablet_id={}", clusterKeyIndexes, tableId, tabletId);
+                LOG.debug("cluster key uids={}, table_id={}, tablet_id={}", clusterKeyUids, tableId, tabletId);
             }
         }
         if (CollectionUtils.isNotEmpty(indexes)) {
@@ -335,9 +363,12 @@ public class CreateReplicaTask extends AgentTask {
         }
         tSchema.setIsInMemory(isInMemory);
         tSchema.setDisableAutoCompaction(disableAutoCompaction);
+        tSchema.setVariantEnableFlattenNested(variantEnableFlattenNested);
         tSchema.setEnableSingleReplicaCompaction(enableSingleReplicaCompaction);
         tSchema.setSkipWriteIndexOnLoad(skipWriteIndexOnLoad);
         tSchema.setStoreRowColumn(storeRowColumn);
+        tSchema.setRowStorePageSize(rowStorePageSize);
+        tSchema.setStoragePageSize(storagePageSize);
         createTabletReq.setTabletSchema(tSchema);
 
         createTabletReq.setVersion(version);
@@ -362,8 +393,19 @@ public class CreateReplicaTask extends AgentTask {
             createTabletReq.setStorageFormat(storageFormat);
         }
 
-        if (invertedIndexStorageFormat != null) {
-            createTabletReq.setInvertedIndexStorageFormat(invertedIndexStorageFormat);
+        if (invertedIndexFileStorageFormat != null) {
+            createTabletReq.setInvertedIndexFileStorageFormat(invertedIndexFileStorageFormat);
+            // We will discard the "TInvertedIndexStorageFormat". Don't make any further changes here.
+            switch (invertedIndexFileStorageFormat) {
+                case V1:
+                    createTabletReq.setInvertedIndexStorageFormat(TInvertedIndexStorageFormat.V1);
+                    break;
+                case V2:
+                    createTabletReq.setInvertedIndexStorageFormat(TInvertedIndexStorageFormat.V2);
+                    break;
+                default:
+                    break;
+            }
         }
         createTabletReq.setTabletType(tabletType);
         createTabletReq.setCompressionType(compressionType);

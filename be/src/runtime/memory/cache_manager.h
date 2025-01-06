@@ -40,7 +40,8 @@ public:
 #ifdef BE_TEST
             _caches.erase(it);
 #else
-            LOG(FATAL) << "Repeat register cache " << CachePolicy::type_string(cache->type());
+            throw Exception(Status::FatalError("Repeat register cache {}",
+                                               CachePolicy::type_string(cache->type())));
 #endif // BE_TEST
         }
         _caches.insert({cache->type(), cache});
@@ -64,10 +65,9 @@ public:
 
     int64_t for_each_cache_prune_stale(RuntimeProfile* profile = nullptr);
 
-    int64_t for_each_cache_prune_all(RuntimeProfile* profile = nullptr);
-
-    void clear_once();
-    void clear_once(CachePolicy::CacheType type);
+    // if force is true, regardless of the two prune interval and cache size, cache will be pruned this time.
+    int64_t for_each_cache_prune_all(RuntimeProfile* profile = nullptr, bool force = false);
+    int64_t cache_prune_all(CachePolicy::CacheType type, bool force = false);
 
     bool need_prune(int64_t* last_timestamp, const std::string& type) {
         int64_t now = UnixSeconds();
@@ -81,6 +81,9 @@ public:
                 type, config::cache_prune_interval_sec, now, *last_timestamp);
         return false;
     }
+
+    int64_t for_each_cache_refresh_capacity(double adjust_weighted,
+                                            RuntimeProfile* profile = nullptr);
 
 private:
     std::mutex _caches_lock;

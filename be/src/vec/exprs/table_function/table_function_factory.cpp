@@ -21,7 +21,6 @@
 
 #include <memory>
 #include <string_view>
-#include <utility>
 
 #include "common/object_pool.h"
 #include "vec/exprs/table_function/table_function.h"
@@ -29,12 +28,15 @@
 #include "vec/exprs/table_function/vexplode.h"
 #include "vec/exprs/table_function/vexplode_bitmap.h"
 #include "vec/exprs/table_function/vexplode_json_array.h"
+#include "vec/exprs/table_function/vexplode_json_object.h"
 #include "vec/exprs/table_function/vexplode_map.h"
 #include "vec/exprs/table_function/vexplode_numbers.h"
 #include "vec/exprs/table_function/vexplode_split.h"
+#include "vec/exprs/table_function/vposexplode.h"
 #include "vec/utils/util.hpp"
 
 namespace doris::vectorized {
+#include "common/compile_check_begin.h"
 
 template <typename TableFunctionType>
 struct TableFunctionCreator {
@@ -50,6 +52,7 @@ struct VExplodeJsonArrayCreator {
 
 const std::unordered_map<std::string, std::function<std::unique_ptr<TableFunction>()>>
         TableFunctionFactory::_function_map {
+                {"explode_variant_array", TableFunctionCreator<VExplodeTableFunction>()},
                 {"explode_split", TableFunctionCreator<VExplodeSplitTableFunction>()},
                 {"explode_numbers", TableFunctionCreator<VExplodeNumbersTableFunction>()},
                 {"explode_json_array_int", VExplodeJsonArrayCreator<ParsedDataInt>()},
@@ -58,6 +61,8 @@ const std::unordered_map<std::string, std::function<std::unique_ptr<TableFunctio
                 {"explode_json_array_json", VExplodeJsonArrayCreator<ParsedDataJSON>()},
                 {"explode_bitmap", TableFunctionCreator<VExplodeBitmapTableFunction>()},
                 {"explode_map", TableFunctionCreator<VExplodeMapTableFunction> {}},
+                {"explode_json_object", TableFunctionCreator<VExplodeJsonObjectTableFunction> {}},
+                {"posexplode", TableFunctionCreator<VPosExplodeTableFunction> {}},
                 {"explode", TableFunctionCreator<VExplodeTableFunction> {}}};
 
 Status TableFunctionFactory::get_fn(const TFunction& t_fn, ObjectPool* pool, TableFunction** fn) {
@@ -86,4 +91,5 @@ Status TableFunctionFactory::get_fn(const TFunction& t_fn, ObjectPool* pool, Tab
     return Status::NotSupported("Table function {} is not support", t_fn.name.function_name);
 }
 
+#include "common/compile_check_end.h"
 } // namespace doris::vectorized

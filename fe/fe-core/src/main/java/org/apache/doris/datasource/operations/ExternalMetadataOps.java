@@ -62,6 +62,14 @@ public interface ExternalMetadataOps {
 
     /**
      *
+     * @param dbName
+     * @param tblName
+     * @param partitions
+     */
+    void truncateTable(String dbName, String tblName, List<String> partitions) throws DdlException;
+
+    /**
+     *
      * @return
      */
     List<String> listDatabaseNames();
@@ -82,6 +90,10 @@ public interface ExternalMetadataOps {
     boolean tableExist(String dbName, String tblName);
 
     boolean databaseExist(String dbName);
+
+    default Object loadTable(String dbName, String tblName) {
+        throw new UnsupportedOperationException("Load table is not supported.");
+    }
 
     /**
      * close the connection, eg, to hms

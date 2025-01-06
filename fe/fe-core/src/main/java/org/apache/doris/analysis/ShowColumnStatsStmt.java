@@ -50,7 +50,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-public class ShowColumnStatsStmt extends ShowStmt {
+public class ShowColumnStatsStmt extends ShowStmt implements NotFallbackInParser {
 
     private static final ImmutableList<String> TABLE_COLUMN_TITLE_NAMES =
             new ImmutableList.Builder<String>()
@@ -70,6 +70,7 @@ public class ShowColumnStatsStmt extends ShowStmt {
                     .add("updated_time")
                     .add("update_rows")
                     .add("last_analyze_row_count")
+                    .add("last_analyze_version")
                     .build();
 
     private static final ImmutableList<String> PARTITION_COLUMN_TITLE_NAMES =
@@ -185,6 +186,7 @@ public class ShowColumnStatsStmt extends ShowStmt {
             row.add(String.valueOf(p.second.updatedTime));
             row.add(String.valueOf(colStatsMeta == null ? "N/A" : colStatsMeta.updatedRows));
             row.add(String.valueOf(colStatsMeta == null ? "N/A" : colStatsMeta.rowCount));
+            row.add(String.valueOf(colStatsMeta == null ? "N/A" : colStatsMeta.tableVersion));
             result.add(row);
         });
         return new ShowResultSet(getMetaData(), result);
@@ -247,8 +249,8 @@ public class ShowColumnStatsStmt extends ShowStmt {
             row.add(String.valueOf(value.count)); // count
             row.add(String.valueOf(value.ndv.estimateCardinality())); // ndv
             row.add(String.valueOf(value.numNulls)); // num_null
-            row.add(String.valueOf(value.minValue)); // min
-            row.add(String.valueOf(value.maxValue)); // max
+            row.add(String.valueOf(value.minExpr == null ? "N/A" : value.minExpr.toSql())); // min
+            row.add(String.valueOf(value.maxExpr == null ? "N/A" : value.maxExpr.toSql())); // max
             row.add(String.valueOf(value.dataSize)); // data_size
             row.add(value.updatedTime); // updated_time
             row.add("N/A"); // update_rows

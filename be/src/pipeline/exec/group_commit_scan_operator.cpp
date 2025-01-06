@@ -20,7 +20,7 @@
 #include <fmt/format.h>
 
 namespace doris::pipeline {
-
+#include "common/compile_check_begin.h"
 GroupCommitOperatorX::GroupCommitOperatorX(ObjectPool* pool, const TPlanNode& tnode,
                                            int operator_id, const DescriptorTbl& descs,
                                            int parallel_tasks)
@@ -31,9 +31,11 @@ GroupCommitOperatorX::GroupCommitOperatorX(ObjectPool* pool, const TPlanNode& tn
 
 Status GroupCommitOperatorX::get_block(RuntimeState* state, vectorized::Block* block, bool* eos) {
     auto& local_state = get_local_state(state);
+    SCOPED_TIMER(local_state.exec_time_counter());
     bool find_node = false;
     while (!find_node && !*eos) {
-        RETURN_IF_ERROR(local_state.load_block_queue->get_block(state, block, &find_node, eos));
+        RETURN_IF_ERROR(local_state.load_block_queue->get_block(state, block, &find_node, eos,
+                                                                local_state._get_block_dependency));
     }
     return Status::OK();
 }
@@ -42,8 +44,10 @@ Status GroupCommitLocalState::init(RuntimeState* state, LocalStateInfo& info) {
     RETURN_IF_ERROR(ScanLocalState<GroupCommitLocalState>::init(state, info));
     SCOPED_TIMER(_init_timer);
     auto& p = _parent->cast<GroupCommitOperatorX>();
+    _get_block_dependency = Dependency::create_shared(_parent->operator_id(), _parent->node_id(),
+                                                      "GroupCommitGetBlockDependency", true);
     return state->exec_env()->group_commit_mgr()->get_load_block_queue(
-            p._table_id, state->fragment_instance_id(), load_block_queue);
+            p._table_id, state->fragment_instance_id(), load_block_queue, _get_block_dependency);
 }
 
 Status GroupCommitLocalState::_process_conjuncts(RuntimeState* state) {

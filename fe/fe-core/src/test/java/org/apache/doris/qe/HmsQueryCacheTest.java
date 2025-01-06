@@ -114,12 +114,15 @@ public class HmsQueryCacheTest extends AnalyzeCheckTestBase {
         List<Column> schema = Lists.newArrayList();
         schema.add(new Column("k1", PrimitiveType.INT));
 
-        HMSExternalDatabase db = new HMSExternalDatabase(hmsCatalog, 10000, "hms_db");
+        HMSExternalDatabase db = new HMSExternalDatabase(hmsCatalog, 10000, "hms_db", "hms_db");
         Deencapsulation.setField(db, "initialized", true);
 
         Deencapsulation.setField(tbl, "objectCreated", true);
         Deencapsulation.setField(tbl, "schemaUpdateTime", NOW);
         Deencapsulation.setField(tbl, "eventUpdateTime", 0);
+        Deencapsulation.setField(tbl, "catalog", hmsCatalog);
+        Deencapsulation.setField(tbl, "dbName", "hms_db");
+        Deencapsulation.setField(tbl, "name", "hms_tbl");
         new Expectations(tbl) {
             {
                 tbl.getId();
@@ -167,6 +170,9 @@ public class HmsQueryCacheTest extends AnalyzeCheckTestBase {
         Deencapsulation.setField(tbl2, "objectCreated", true);
         Deencapsulation.setField(tbl2, "schemaUpdateTime", NOW);
         Deencapsulation.setField(tbl2, "eventUpdateTime", 0);
+        Deencapsulation.setField(tbl2, "catalog", hmsCatalog);
+        Deencapsulation.setField(tbl2, "dbName", "hms_db");
+        Deencapsulation.setField(tbl2, "name", "hms_tbl2");
         new Expectations(tbl2) {
             {
                 tbl2.getId();
@@ -517,8 +523,13 @@ public class HmsQueryCacheTest extends AnalyzeCheckTestBase {
         init((HMSExternalCatalog) mgr.getCatalog(HMS_CATALOG));
         StatementBase parseStmt = parseAndAnalyzeStmt("select * from hms_ctl.hms_db.hms_tbl", connectContext);
         List<ScanNode> scanNodes = Arrays.asList(hiveScanNode1);
+
+        CacheAnalyzer ca2 = new CacheAnalyzer(connectContext, parseStmt, scanNodes);
+        ca2.checkCacheMode(0);
+        long latestPartitionTime = ca2.getLatestTable().latestPartitionTime;
+
         CacheAnalyzer ca = new CacheAnalyzer(connectContext, parseStmt, scanNodes);
-        ca.checkCacheMode(0);
+        ca.checkCacheMode(latestPartitionTime);
         Assert.assertEquals(CacheAnalyzer.CacheMode.None, ca.getCacheMode());
     }
 
@@ -527,8 +538,13 @@ public class HmsQueryCacheTest extends AnalyzeCheckTestBase {
         init((HMSExternalCatalog) mgr.getCatalog(HMS_CATALOG));
         StatementBase parseStmt = analyzeAndGetStmtByNereids("select * from hms_ctl.hms_db.hms_tbl", connectContext);
         List<ScanNode> scanNodes = Arrays.asList(hiveScanNode1);
+
+        CacheAnalyzer ca2 = new CacheAnalyzer(connectContext, parseStmt, scanNodes);
+        ca2.checkCacheModeForNereids(0);
+        long latestPartitionTime = ca2.getLatestTable().latestPartitionTime;
+
         CacheAnalyzer ca = new CacheAnalyzer(connectContext, parseStmt, scanNodes);
-        ca.checkCacheModeForNereids(0);
+        ca.checkCacheModeForNereids(latestPartitionTime);
         Assert.assertEquals(CacheAnalyzer.CacheMode.None, ca.getCacheMode());
     }
 

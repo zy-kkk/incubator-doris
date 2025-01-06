@@ -27,9 +27,11 @@ import org.apache.doris.nereids.jobs.JobContext;
 import org.apache.doris.nereids.rules.analysis.UserAuthentication;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
+import org.apache.doris.nereids.trees.expressions.functions.table.TableValuedFunction;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalCatalogRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalRelation;
+import org.apache.doris.nereids.trees.plans.logical.LogicalTVFRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalView;
 import org.apache.doris.qe.ConnectContext;
 
@@ -47,9 +49,13 @@ public class CheckPrivileges extends ColumnPruning {
 
     @Override
     public Plan rewriteRoot(Plan plan, JobContext jobContext) {
+        // Only enter once, if repeated, the permissions of the table in the view will be checked
+        if (jobContext.getCascadesContext().getStatementContext().isPrivChecked()) {
+            return plan;
+        }
         this.jobContext = jobContext;
         super.rewriteRoot(plan, jobContext);
-
+        jobContext.getCascadesContext().getStatementContext().setPrivChecked(true);
         // don't rewrite plan
         return plan;
     }
@@ -60,6 +66,13 @@ public class CheckPrivileges extends ColumnPruning {
 
         // stop check privilege in the view
         return view;
+    }
+
+    @Override
+    public Plan visitLogicalTVFRelation(LogicalTVFRelation tvfRelation, PruneContext context) {
+        TableValuedFunction tvf = tvfRelation.getFunction();
+        tvf.checkAuth(jobContext.getCascadesContext().getConnectContext());
+        return super.visitLogicalTVFRelation(tvfRelation, context);
     }
 
     @Override

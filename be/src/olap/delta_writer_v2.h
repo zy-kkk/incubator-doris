@@ -46,7 +46,6 @@ namespace doris {
 
 class FlushToken;
 class MemTable;
-class MemTracker;
 class Schema;
 class StorageEngine;
 class TupleDescriptor;
@@ -78,7 +77,7 @@ public:
     Status close();
     // wait for all memtables to be flushed.
     // mem_consumption() should be 0 after this function returns.
-    Status close_wait(RuntimeProfile* profile = nullptr);
+    Status close_wait(int32_t& num_segments, RuntimeProfile* profile = nullptr);
 
     // abandon current memtable and wait for all pending-flushing memtables to be destructed.
     // mem_consumption() should be 0 after this function returns.

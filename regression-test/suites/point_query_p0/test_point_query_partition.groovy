@@ -17,13 +17,12 @@
 
 import java.math.BigDecimal;
 
-suite("test_point_query_partition", "nonConcurrent") {
+suite("test_point_query_partition") {
     def user = context.config.jdbcUser
     def password = context.config.jdbcPassword
     def realDb = "regression_test_serving_p0"
     def tableName = realDb + ".tbl_point_query_partition"
     sql "CREATE DATABASE IF NOT EXISTS ${realDb}"
-    sql "set global enable_server_side_prepared_statement = true"
     // Parse url
     String jdbcUrl = context.config.jdbcUrl
     String urlWithoutSchema = jdbcUrl.substring(jdbcUrl.indexOf("://") + 3)
@@ -49,7 +48,7 @@ suite("test_point_query_partition", "nonConcurrent") {
 
     def nprep_sql = { sql_str ->
         def url_without_prep = "jdbc:mysql://" + sql_ip + ":" + sql_port + "/" + realDb
-        connect(user = user, password = password, url = url_without_prep) {
+        connect(user, password, url_without_prep) {
             sql sql_str
         }
     }
@@ -86,7 +85,7 @@ suite("test_point_query_partition", "nonConcurrent") {
     sql """INSERT INTO ${tableName} VALUES (33, 'f')"""
     sql """INSERT INTO ${tableName} VALUES (45, 'g')"""
     sql """INSERT INTO ${tableName} VALUES (999, 'h')"""
-    def result1 = connect(user=user, password=password, url=prepare_url) {
+    def result1 = connect(user, password, prepare_url) {
         def stmt = prepareStatement "select * from ${tableName} where k1 = ?"
         assertEquals(stmt.class, com.mysql.cj.jdbc.ServerPreparedStatement);
         stmt.setInt(1, 1)
@@ -140,7 +139,7 @@ suite("test_point_query_partition", "nonConcurrent") {
     """  
     sql """insert into regression_test_serving_p0.customer(customer_key, customer_value_0, customer_value_1) values(686612, "686612", "686612")"""
     sql """insert into regression_test_serving_p0.customer(customer_key, customer_value_0, customer_value_1) values(686613, "686613", "686613")"""
-    def result3 = connect(user=user, password=password, url=prepare_url) {
+    def result3 = connect(user, password, prepare_url) {
         def stmt = prepareStatement "select /*+ SET_VAR(enable_nereids_planner=true) */ * from regression_test_serving_p0.customer where customer_key = ?"
         stmt.setInt(1, 686612)
         qe_point_selectxxx stmt 
@@ -150,5 +149,4 @@ suite("test_point_query_partition", "nonConcurrent") {
         qe_point_selectmmm stmt 
         qe_point_selecteee stmt 
     }
-    sql "set global enable_server_side_prepared_statement = false"
 } 

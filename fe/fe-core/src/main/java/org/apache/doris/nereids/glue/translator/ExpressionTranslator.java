@@ -32,17 +32,15 @@ import org.apache.doris.analysis.FunctionCallExpr;
 import org.apache.doris.analysis.FunctionName;
 import org.apache.doris.analysis.FunctionParams;
 import org.apache.doris.analysis.IndexDef;
-import org.apache.doris.analysis.InvertedIndexUtil;
 import org.apache.doris.analysis.IsNullPredicate;
 import org.apache.doris.analysis.LambdaFunctionCallExpr;
 import org.apache.doris.analysis.LambdaFunctionExpr;
 import org.apache.doris.analysis.MatchPredicate;
 import org.apache.doris.analysis.OrderByElement;
-import org.apache.doris.analysis.SlotDescriptor;
 import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.analysis.TimestampArithmeticExpr;
-import org.apache.doris.analysis.TupleDescriptor;
 import org.apache.doris.catalog.ArrayType;
+import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Function;
 import org.apache.doris.catalog.Function.NullableMode;
 import org.apache.doris.catalog.Index;
@@ -80,6 +78,7 @@ import org.apache.doris.nereids.trees.expressions.VirtualSlotReference;
 import org.apache.doris.nereids.trees.expressions.WhenClause;
 import org.apache.doris.nereids.trees.expressions.functions.AlwaysNotNullable;
 import org.apache.doris.nereids.trees.expressions.functions.AlwaysNullable;
+import org.apache.doris.nereids.trees.expressions.functions.PropagateNullLiteral;
 import org.apache.doris.nereids.trees.expressions.functions.agg.AggregateFunction;
 import org.apache.doris.nereids.trees.expressions.functions.agg.AggregateParam;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Count;
@@ -90,7 +89,6 @@ import org.apache.doris.nereids.trees.expressions.functions.combinator.UnionComb
 import org.apache.doris.nereids.trees.expressions.functions.generator.TableGeneratingFunction;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.ArrayMap;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.ElementAt;
-import org.apache.doris.nereids.trees.expressions.functions.scalar.HighOrderFunction;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.Lambda;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.ScalarFunction;
 import org.apache.doris.nereids.trees.expressions.functions.udf.JavaUdaf;
@@ -106,10 +104,10 @@ import org.apache.doris.thrift.TFunctionBinaryType;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Deque;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -192,19 +190,11 @@ public class ExpressionTranslator extends DefaultExpressionVisitor<Expr, PlanTra
         return le;
     }
 
-    private OlapTable getOlapTableFromSlotDesc(SlotDescriptor slotDesc) {
-        if (slotDesc != null && slotDesc.isScanSlot()) {
-            TupleDescriptor slotParent = slotDesc.getParent();
-            return (OlapTable) slotParent.getTable();
-        }
-        return null;
-    }
-
-    private OlapTable getOlapTableDirectly(SlotRef left) {
-        if (left.getTableDirect() instanceof OlapTable) {
-            return (OlapTable) left.getTableDirect();
-        }
-        return null;
+    private OlapTable getOlapTableDirectly(SlotReference slot) {
+        return slot.getTable()
+               .filter(OlapTable.class::isInstance)
+               .map(OlapTable.class::cast)
+               .orElse(null);
     }
 
     @Override
@@ -214,16 +204,22 @@ public class ExpressionTranslator extends DefaultExpressionVisitor<Expr, PlanTra
 
     @Override
     public Expr visitMatch(Match match, PlanTranslatorContext context) {
-        String invertedIndexParser = InvertedIndexUtil.INVERTED_INDEX_PARSER_UNKNOWN;
-        String invertedIndexParserMode = InvertedIndexUtil.INVERTED_INDEX_PARSER_COARSE_GRANULARITY;
-        Map<String, String> invertedIndexCharFilter = new HashMap<>();
+        Index invertedIndex = null;
         // Get the first slot from match's left expr
-        SlotRef left = (SlotRef) match.left().getInputSlots().stream().findFirst().get().accept(this, context);
-        OlapTable olapTbl = Optional.ofNullable(getOlapTableFromSlotDesc(left.getDesc()))
-                                    .orElse(getOlapTableDirectly(left));
+        SlotReference slot = match.getInputSlots().stream()
+                        .findFirst()
+                        .filter(SlotReference.class::isInstance)
+                        .map(SlotReference.class::cast)
+                        .orElseThrow(() -> new AnalysisException(
+                                    "No SlotReference found in Match, SQL is " + match.toSql()));
 
+        Column column = slot.getColumn()
+                        .orElseThrow(() -> new AnalysisException(
+                                    "SlotReference in Match failed to get Column, SQL is " + match.toSql()));
+
+        OlapTable olapTbl = getOlapTableDirectly(slot);
         if (olapTbl == null) {
-            throw new AnalysisException("slotRef in matchExpression failed to get OlapTable");
+            throw new AnalysisException("SlotReference in Match failed to get OlapTable, SQL is " + match.toSql());
         }
 
         List<Index> indexes = olapTbl.getIndexes();
@@ -231,10 +227,8 @@ public class ExpressionTranslator extends DefaultExpressionVisitor<Expr, PlanTra
             for (Index index : indexes) {
                 if (index.getIndexType() == IndexDef.IndexType.INVERTED) {
                     List<String> columns = index.getColumns();
-                    if (columns != null && !columns.isEmpty() && left.getColumnName().equals(columns.get(0))) {
-                        invertedIndexParser = index.getInvertedIndexParser();
-                        invertedIndexParserMode = index.getInvertedIndexParserMode();
-                        invertedIndexCharFilter = index.getInvertedIndexCharFilter();
+                    if (columns != null && !columns.isEmpty() && column.getName().equals(columns.get(0))) {
+                        invertedIndex = index;
                         break;
                     }
                 }
@@ -244,8 +238,7 @@ public class ExpressionTranslator extends DefaultExpressionVisitor<Expr, PlanTra
         MatchPredicate.Operator op = match.op();
         MatchPredicate matchPredicate = new MatchPredicate(op, match.left().accept(this, context),
                 match.right().accept(this, context), match.getDataType().toCatalogDataType(),
-                NullableMode.DEPEND_ON_ARGUMENT, invertedIndexParser, invertedIndexParserMode,
-                invertedIndexCharFilter);
+                NullableMode.DEPEND_ON_ARGUMENT, invertedIndex);
         matchPredicate.setNullableFromNereids(match.nullable());
         return matchPredicate;
     }
@@ -331,22 +324,85 @@ public class ExpressionTranslator extends DefaultExpressionVisitor<Expr, PlanTra
         return nullLit;
     }
 
+    private static class Frame {
+        int low;
+        int high;
+        CompoundPredicate.Operator op;
+        boolean processed;
+
+        Frame(int low, int high, CompoundPredicate.Operator op) {
+            this.low = low;
+            this.high = high;
+            this.op = op;
+            this.processed = false;
+        }
+    }
+
+    private Expr toBalancedTree(int low, int high, List<Expr> children,
+            CompoundPredicate.Operator op) {
+        Deque<Frame> stack = new ArrayDeque<>();
+        Deque<Expr> results = new ArrayDeque<>();
+
+        stack.push(new Frame(low, high, op));
+
+        while (!stack.isEmpty()) {
+            Frame currentFrame = stack.peek();
+
+            if (!currentFrame.processed) {
+                int l = currentFrame.low;
+                int h = currentFrame.high;
+                int diff = h - l;
+
+                if (diff == 0) {
+                    results.push(children.get(l));
+                    stack.pop();
+                } else if (diff == 1) {
+                    Expr left = children.get(l);
+                    Expr right = children.get(h);
+                    CompoundPredicate cp = new CompoundPredicate(op, left, right);
+                    results.push(cp);
+                    stack.pop();
+                } else {
+                    int mid = l + (h - l) / 2;
+
+                    currentFrame.processed = true;
+
+                    stack.push(new Frame(mid + 1, h, op));
+                    stack.push(new Frame(l, mid, op));
+                }
+            } else {
+                stack.pop();
+                if (results.size() >= 2) {
+                    Expr right = results.pop();
+                    Expr left = results.pop();
+                    CompoundPredicate cp = new CompoundPredicate(currentFrame.op, left, right);
+                    results.push(cp);
+                }
+            }
+        }
+        return results.pop();
+    }
+
     @Override
     public Expr visitAnd(And and, PlanTranslatorContext context) {
-        org.apache.doris.analysis.CompoundPredicate cp = new org.apache.doris.analysis.CompoundPredicate(
-                org.apache.doris.analysis.CompoundPredicate.Operator.AND,
-                and.child(0).accept(this, context),
-                and.child(1).accept(this, context));
+        List<Expr> children = and.children().stream().map(
+                e -> e.accept(this, context)
+        ).collect(Collectors.toList());
+        CompoundPredicate cp = (CompoundPredicate) toBalancedTree(0, children.size() - 1,
+                children, CompoundPredicate.Operator.AND);
+
         cp.setNullableFromNereids(and.nullable());
         return cp;
     }
 
     @Override
     public Expr visitOr(Or or, PlanTranslatorContext context) {
-        org.apache.doris.analysis.CompoundPredicate cp = new org.apache.doris.analysis.CompoundPredicate(
-                org.apache.doris.analysis.CompoundPredicate.Operator.OR,
-                or.child(0).accept(this, context),
-                or.child(1).accept(this, context));
+        List<Expr> children = or.children().stream().map(
+                e -> e.accept(this, context)
+        ).collect(Collectors.toList());
+        CompoundPredicate cp = (CompoundPredicate) toBalancedTree(0, children.size() - 1,
+                children, CompoundPredicate.Operator.OR);
+
         cp.setNullableFromNereids(or.nullable());
         return cp;
     }
@@ -516,11 +572,7 @@ public class ExpressionTranslator extends DefaultExpressionVisitor<Expr, PlanTra
 
         FunctionCallExpr functionCallExpr;
         // create catalog FunctionCallExpr without analyze again
-        if (function instanceof HighOrderFunction) {
-            functionCallExpr = new LambdaFunctionCallExpr(catalogFunction, new FunctionParams(false, arguments));
-        } else {
-            functionCallExpr = new FunctionCallExpr(catalogFunction, new FunctionParams(false, arguments));
-        }
+        functionCallExpr = new FunctionCallExpr(catalogFunction, new FunctionParams(false, arguments));
         functionCallExpr.setNullableFromNereids(function.nullable());
         return functionCallExpr;
     }
@@ -571,7 +623,7 @@ public class ExpressionTranslator extends DefaultExpressionVisitor<Expr, PlanTra
     @Override
     public Expr visitBinaryArithmetic(BinaryArithmetic binaryArithmetic, PlanTranslatorContext context) {
         NullableMode nullableMode = NullableMode.DEPEND_ON_ARGUMENT;
-        if (binaryArithmetic instanceof AlwaysNullable) {
+        if (binaryArithmetic instanceof AlwaysNullable || binaryArithmetic instanceof PropagateNullLiteral) {
             nullableMode = NullableMode.ALWAYS_NULLABLE;
         } else if (binaryArithmetic instanceof AlwaysNotNullable) {
             nullableMode = NullableMode.ALWAYS_NOT_NULLABLE;
@@ -624,7 +676,9 @@ public class ExpressionTranslator extends DefaultExpressionVisitor<Expr, PlanTra
 
     @Override
     public Expr visitStateCombinator(StateCombinator combinator, PlanTranslatorContext context) {
-        List<Expr> arguments = combinator.getArguments().stream().map(arg -> arg.accept(this, context))
+        List<Expr> arguments = combinator.getArguments().stream().map(arg -> arg instanceof OrderExpression
+                        ? translateOrderExpression((OrderExpression) arg, context).getExpr()
+                        : arg.accept(this, context))
                 .collect(Collectors.toList());
         return Function.convertToStateCombinator(
                 new FunctionCallExpr(visitAggregateFunction(combinator.getNestedFunction(), context).getFn(),

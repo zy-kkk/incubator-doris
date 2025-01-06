@@ -177,6 +177,7 @@ jmethodID JniUtil::get_jmx_json_ = nullptr;
 jobject JniUtil::jni_scanner_loader_obj_ = nullptr;
 jmethodID JniUtil::jni_scanner_loader_method_ = nullptr;
 jlong JniUtil::max_jvm_heap_memory_size_ = 0;
+jmethodID JniUtil::_clean_udf_cache_method_id = nullptr;
 
 Status JniUtfCharGuard::create(JNIEnv* env, jstring jstr, JniUtfCharGuard* out) {
     DCHECK(jstr != nullptr);
@@ -316,6 +317,7 @@ Status JniUtil::GetJniExceptionMsg(JNIEnv* env, bool log_stack, const string& pr
 }
 
 jobject JniUtil::convert_to_java_map(JNIEnv* env, const std::map<std::string, std::string>& map) {
+    //TODO: ADD EXCEPTION CHECK.
     jclass hashmap_class = env->FindClass("java/util/HashMap");
     jmethodID hashmap_constructor = env->GetMethodID(hashmap_class, "<init>", "(I)V");
     jobject hashmap_object = env->NewObject(hashmap_class, hashmap_constructor, map.size());
@@ -398,16 +400,26 @@ std::map<std::string, std::string> JniUtil::convert_to_cpp_map(JNIEnv* env, jobj
 
 Status JniUtil::GetGlobalClassRef(JNIEnv* env, const char* class_str, jclass* class_ref) {
     *class_ref = NULL;
-    jclass local_cl = env->FindClass(class_str);
-    RETURN_ERROR_IF_EXC(env);
+    JNI_CALL_METHOD_CHECK_EXCEPTION_DELETE_REF(jclass, local_cl, env, FindClass(class_str));
     RETURN_IF_ERROR(LocalToGlobalRef(env, local_cl, reinterpret_cast<jobject*>(class_ref)));
-    env->DeleteLocalRef(local_cl);
-    RETURN_ERROR_IF_EXC(env);
     return Status::OK();
 }
 
 Status JniUtil::LocalToGlobalRef(JNIEnv* env, jobject local_ref, jobject* global_ref) {
     *global_ref = env->NewGlobalRef(local_ref);
+    // NewGlobalRef:
+    // Returns a global reference to the given obj.
+    //
+    //May return NULL if:
+    //  obj refers to null
+    //  the system has run out of memory
+    //  obj was a weak global reference and has already been garbage collected
+    if (*global_ref == NULL) {
+        return Status::InternalError(
+                "LocalToGlobalRef fail,global ref is NULL,maybe the system has run out of memory.");
+    }
+
+    //NewGlobalRef not throw exception,maybe we just need check NULL.
     RETURN_ERROR_IF_EXC(env);
     return Status::OK();
 }
@@ -440,6 +452,25 @@ Status JniUtil::init_jni_scanner_loader(JNIEnv* env) {
         return Status::InternalError("Failed to create ScannerLoader object.");
     }
     env->CallVoidMethod(jni_scanner_loader_obj_, load_jni_scanner);
+    RETURN_ERROR_IF_EXC(env);
+
+    _clean_udf_cache_method_id = env->GetMethodID(jni_scanner_loader_cls, "cleanUdfClassLoader",
+                                                  "(Ljava/lang/String;)V");
+    if (_clean_udf_cache_method_id == nullptr) {
+        if (env->ExceptionOccurred()) {
+            env->ExceptionDescribe();
+        }
+        return Status::InternalError("Failed to find removeUdfClassLoader method.");
+    }
+    RETURN_ERROR_IF_EXC(env);
+    return Status::OK();
+}
+
+Status JniUtil::clean_udf_class_load_cache(const std::string& function_signature) {
+    JNIEnv* env = nullptr;
+    RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
+    env->CallVoidMethod(jni_scanner_loader_obj_, _clean_udf_cache_method_id,
+                        env->NewStringUTF(function_signature.c_str()));
     RETURN_ERROR_IF_EXC(env);
     return Status::OK();
 }

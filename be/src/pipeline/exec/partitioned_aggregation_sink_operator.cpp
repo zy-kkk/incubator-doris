@@ -22,10 +22,12 @@
 
 #include "aggregation_sink_operator.h"
 #include "common/status.h"
+#include "pipeline/exec/spill_utils.h"
 #include "runtime/fragment_mgr.h"
 #include "vec/spill/spill_stream_manager.h"
 
 namespace doris::pipeline {
+#include "common/compile_check_begin.h"
 PartitionedAggSinkLocalState::PartitionedAggSinkLocalState(DataSinkOperatorXBase* parent,
                                                            RuntimeState* state)
         : Base(parent, state) {
@@ -33,6 +35,7 @@ PartitionedAggSinkLocalState::PartitionedAggSinkLocalState(DataSinkOperatorXBase
             std::make_shared<Dependency>(parent->operator_id(), parent->node_id(),
                                          parent->get_name() + "_SPILL_DEPENDENCY", true);
 }
+
 Status PartitionedAggSinkLocalState::init(doris::RuntimeState* state,
                                           doris::pipeline::LocalSinkStateInfo& info) {
     RETURN_IF_ERROR(Base::init(state, info));
@@ -65,6 +68,7 @@ Status PartitionedAggSinkLocalState::open(RuntimeState* state) {
     SCOPED_TIMER(Base::_open_timer);
     return Base::open(state);
 }
+
 Status PartitionedAggSinkLocalState::close(RuntimeState* state, Status exec_status) {
     SCOPED_TIMER(Base::exec_time_counter());
     SCOPED_TIMER(Base::_close_timer);
@@ -78,10 +82,10 @@ Status PartitionedAggSinkLocalState::close(RuntimeState* state, Status exec_stat
 void PartitionedAggSinkLocalState::_init_counters() {
     _internal_runtime_profile = std::make_unique<RuntimeProfile>("internal_profile");
 
-    _hash_table_memory_usage = ADD_CHILD_COUNTER_WITH_LEVEL(Base::profile(), "HashTable",
-                                                            TUnit::BYTES, "MemoryUsage", 1);
+    _hash_table_memory_usage =
+            ADD_COUNTER_WITH_LEVEL(Base::profile(), "MemoryUsageHashTable", TUnit::BYTES, 1);
     _serialize_key_arena_memory_usage = Base::profile()->AddHighWaterMarkCounter(
-            "SerializeKeyArena", TUnit::BYTES, "MemoryUsage", 1);
+            "MemoryUsageSerializeKeyArena", TUnit::BYTES, "", 1);
 
     _build_timer = ADD_TIMER(Base::profile(), "BuildTime");
     _serialize_key_timer = ADD_TIMER(Base::profile(), "SerializeKeyTime");
@@ -107,8 +111,8 @@ void PartitionedAggSinkLocalState::_init_counters() {
     } while (false)
 
 void PartitionedAggSinkLocalState::update_profile(RuntimeProfile* child_profile) {
-    UPDATE_PROFILE(_hash_table_memory_usage, "HashTable");
-    UPDATE_PROFILE(_serialize_key_arena_memory_usage, "SerializeKeyArena");
+    UPDATE_PROFILE(_hash_table_memory_usage, "MemoryUsageHashTable");
+    UPDATE_PROFILE(_serialize_key_arena_memory_usage, "MemoryUsageSerializeKeyArena");
     UPDATE_PROFILE(_build_timer, "BuildTime");
     UPDATE_PROFILE(_serialize_key_timer, "SerializeKeyTime");
     UPDATE_PROFILE(_merge_timer, "MergeTime");
@@ -138,13 +142,9 @@ Status PartitionedAggSinkOperatorX::init(const TPlanNode& tnode, RuntimeState* s
     }
 
     _agg_sink_operator->set_dests_id(DataSinkOperatorX<PartitionedAggSinkLocalState>::dests_id());
-    RETURN_IF_ERROR(_agg_sink_operator->set_child(
-            DataSinkOperatorX<PartitionedAggSinkLocalState>::_child_x));
+    RETURN_IF_ERROR(
+            _agg_sink_operator->set_child(DataSinkOperatorX<PartitionedAggSinkLocalState>::_child));
     return _agg_sink_operator->init(tnode, state);
-}
-
-Status PartitionedAggSinkOperatorX::prepare(RuntimeState* state) {
-    return _agg_sink_operator->prepare(state);
 }
 
 Status PartitionedAggSinkOperatorX::open(RuntimeState* state) {
@@ -203,13 +203,13 @@ size_t PartitionedAggSinkOperatorX::revocable_mem_size(RuntimeState* state) cons
 
 Status PartitionedAggSinkLocalState::setup_in_memory_agg_op(RuntimeState* state) {
     _runtime_state = RuntimeState::create_unique(
-            nullptr, state->fragment_instance_id(), state->query_id(), state->fragment_id(),
+            state->fragment_instance_id(), state->query_id(), state->fragment_id(),
             state->query_options(), TQueryGlobals {}, state->exec_env(), state->get_query_ctx());
     _runtime_state->set_task_execution_context(state->get_task_execution_context().lock());
     _runtime_state->set_be_number(state->be_number());
 
     _runtime_state->set_desc_tbl(&state->desc_tbl());
-    _runtime_state->set_pipeline_x_runtime_filter_mgr(state->local_runtime_filter_mgr());
+    _runtime_state->set_runtime_filter_mgr(state->local_runtime_filter_mgr());
     _runtime_state->set_task_id(state->task_id());
 
     auto& parent = Base::_parent->template cast<Parent>();
@@ -253,14 +253,7 @@ Status PartitionedAggSinkLocalState::revoke_memory(RuntimeState* state) {
         }
     }};
 
-    auto execution_context = state->get_task_execution_context();
-    /// Resources in shared state will be released when the operator is closed,
-    /// but there may be asynchronous spilling tasks at this time, which can lead to conflicts.
-    /// So, we need hold the pointer of shared state.
-    std::weak_ptr<PartitionedAggSharedState> shared_state_holder =
-            _shared_state->shared_from_this();
     auto query_id = state->query_id();
-    auto mem_tracker = state->get_query_ctx()->query_mem_tracker;
 
     MonotonicStopWatch submit_timer;
     submit_timer.start();
@@ -269,20 +262,10 @@ Status PartitionedAggSinkLocalState::revoke_memory(RuntimeState* state) {
                 "fault_inject partitioned_agg_sink revoke_memory submit_func failed");
         return status;
     });
-    status = ExecEnv::GetInstance()->spill_stream_mgr()->get_spill_io_thread_pool()->submit_func(
-            [this, &parent, state, query_id, mem_tracker, shared_state_holder, execution_context,
-             submit_timer] {
-                SCOPED_ATTACH_TASK_WITH_ID(mem_tracker, query_id);
-                std::shared_ptr<TaskExecutionContext> execution_context_lock;
-                auto shared_state_sptr = shared_state_holder.lock();
-                if (shared_state_sptr) {
-                    execution_context_lock = execution_context.lock();
-                }
-                if (!shared_state_sptr || !execution_context_lock) {
-                    LOG(INFO) << "query " << print_id(query_id)
-                              << " execution_context released, maybe query was cancelled.";
-                    return Status::Cancelled("Cancelled");
-                }
+
+    auto spill_runnable = std::make_shared<SpillRunnable>(
+            state, _shared_state->shared_from_this(),
+            [this, &parent, state, query_id, submit_timer] {
                 DBUG_EXECUTE_IF("fault_inject::partitioned_agg_sink::revoke_memory_cancel", {
                     auto st = Status::InternalError(
                             "fault_inject partitioned_agg_sink "
@@ -332,7 +315,10 @@ Status PartitionedAggSinkLocalState::revoke_memory(RuntimeState* state) {
                         parent._agg_sink_operator->reset_hash_table(runtime_state);
                 return Base::_shared_state->sink_status;
             });
-    return status;
+
+    return ExecEnv::GetInstance()->spill_stream_mgr()->get_spill_io_thread_pool()->submit(
+            std::move(spill_runnable));
 }
 
+#include "common/compile_check_end.h"
 } // namespace doris::pipeline

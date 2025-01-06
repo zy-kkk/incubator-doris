@@ -87,6 +87,9 @@ public abstract class SqlTestBase extends TestWithFeService implements MemoPatte
                         + "    score bigint\n"
                         + ")\n"
                         + "DUPLICATE KEY(id)\n"
+                        + "AUTO PARTITION BY LIST(`id`)\n"
+                        + "(\n"
+                        + ")\n"
                         + "DISTRIBUTED BY HASH(id) BUCKETS 1\n"
                         + "PROPERTIES (\n"
                         + "  \"replication_num\" = \"1\"\n"
@@ -97,12 +100,13 @@ public abstract class SqlTestBase extends TestWithFeService implements MemoPatte
     @Override
     protected void runBeforeEach() throws Exception {
         StatementScopeIdGenerator.clear();
+        connectContext.getSessionVariable().setDisableNereidsRules("PRUNE_EMPTY_PARTITION");
     }
 
     protected LogicalCompatibilityContext constructContext(Plan p1, Plan p2, CascadesContext context) {
-        StructInfo st1 = MaterializedViewUtils.extractStructInfo(p1,
+        StructInfo st1 = MaterializedViewUtils.extractStructInfo(p1, p1,
                 context, new BitSet()).get(0);
-        StructInfo st2 = MaterializedViewUtils.extractStructInfo(p2,
+        StructInfo st2 = MaterializedViewUtils.extractStructInfo(p2, p2,
                 context, new BitSet()).get(0);
         RelationMapping rm = RelationMapping.generate(st1.getRelations(), st2.getRelations()).get(0);
         SlotMapping sm = SlotMapping.generate(rm);

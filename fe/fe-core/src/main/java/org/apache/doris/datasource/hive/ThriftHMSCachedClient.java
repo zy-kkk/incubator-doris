@@ -20,6 +20,7 @@ package org.apache.doris.datasource.hive;
 import org.apache.doris.analysis.TableName;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.common.Config;
+import org.apache.doris.common.security.authentication.HadoopAuthenticator;
 import org.apache.doris.datasource.DatabaseMetadata;
 import org.apache.doris.datasource.TableMetadata;
 import org.apache.doris.datasource.hive.event.MetastoreNotificationFetchException;
@@ -30,6 +31,7 @@ import com.amazonaws.glue.catalog.metastore.AWSCatalogMetastoreClient;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+import org.apache.hadoop.hive.common.ValidReadTxnList;
 import org.apache.hadoop.hive.common.ValidReaderWriteIdList;
 import org.apache.hadoop.hive.common.ValidTxnList;
 import org.apache.hadoop.hive.common.ValidTxnWriteIdList;
@@ -92,6 +94,7 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
     private boolean isClosed = false;
     private final int poolSize;
     private final HiveConf hiveConf;
+    private HadoopAuthenticator hadoopAuthenticator;
 
     public ThriftHMSCachedClient(HiveConf hiveConf, int poolSize) {
         Preconditions.checkArgument(poolSize > 0, poolSize);
@@ -102,6 +105,10 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
         this.hiveConf = hiveConf;
         this.poolSize = poolSize;
         this.isClosed = false;
+    }
+
+    public void setHadoopAuthenticator(HadoopAuthenticator hadoopAuthenticator) {
+        this.hadoopAuthenticator = hadoopAuthenticator;
     }
 
     @Override
@@ -206,7 +213,7 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
                 throw e;
             }
         } catch (Exception e) {
-            throw new HMSClientException("failed to create database from hms client", e);
+            throw new HMSClientException("failed to create table from hms client", e);
         }
     }
 
@@ -245,6 +252,23 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
     }
 
     @Override
+    public void truncateTable(String dbName, String tblName, List<String> partitions) {
+        try (ThriftHMSClient client = getClient()) {
+            try {
+                ugiDoAs(() -> {
+                    client.client.truncateTable(dbName, tblName, partitions);
+                    return null;
+                });
+            } catch (Exception e) {
+                client.setThrowable(e);
+                throw e;
+            }
+        } catch (Exception e) {
+            throw new HMSClientException("failed to truncate table %s in db %s.", e, tblName, dbName);
+        }
+    }
+
+    @Override
     public boolean tableExists(String dbName, String tblName) {
         try (ThriftHMSClient client = getClient()) {
             try {
@@ -272,7 +296,7 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
                 throw e;
             }
         } catch (Exception e) {
-            throw new HMSClientException("failed to check if table %s in db %s exists", e, tblName, dbName);
+            throw new HMSClientException("failed to list partitions in table '%s.%s'.", e, dbName, tblName);
         }
     }
 
@@ -302,8 +326,15 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
                 throw e;
             }
         } catch (Exception e) {
-            throw new HMSClientException("failed to get partition for table %s in db %s with value %s", e, tblName,
-                    dbName, partitionValues);
+            // Avoid printing too much log
+            String partitionValuesMsg;
+            if (partitionValues.size() <= 3) {
+                partitionValuesMsg = partitionValues.toString();
+            } else {
+                partitionValuesMsg = partitionValues.subList(0, 3) + "... total: " + partitionValues.size();
+            }
+            throw new HMSClientException("failed to get partition for table %s in db %s with value [%s]", e, tblName,
+                    dbName, partitionValuesMsg);
         }
     }
 
@@ -317,8 +348,15 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
                 throw e;
             }
         } catch (Exception e) {
-            throw new HMSClientException("failed to get partition for table %s in db %s with value %s", e, tblName,
-                    dbName, partitionNames);
+            // Avoid printing too much log
+            String partitionNamesMsg;
+            if (partitionNames.size() <= 3) {
+                partitionNamesMsg = partitionNames.toString();
+            } else {
+                partitionNamesMsg = partitionNames.subList(0, 3) + "... total: " + partitionNames.size();
+            }
+            throw new HMSClientException("failed to get partitions for table %s in db %s with value [%s]", e, tblName,
+                    dbName, partitionNamesMsg);
         }
     }
 
@@ -527,7 +565,8 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
     }
 
     @Override
-    public ValidWriteIdList getValidWriteIds(String fullTableName, long currentTransactionId) {
+    public Map<String, String> getValidWriteIds(String fullTableName, long currentTransactionId) {
+        Map<String, String> conf = new HashMap<>();
         try (ThriftHMSClient client = getClient()) {
             try {
                 return ugiDoAs(() -> {
@@ -544,7 +583,10 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
                     ValidTxnWriteIdList validTxnWriteIdList = TxnUtils.createValidTxnWriteIdList(currentTransactionId,
                             tableValidWriteIdsList);
                     ValidWriteIdList writeIdList = validTxnWriteIdList.getTableValidWriteIdList(fullTableName);
-                    return writeIdList;
+
+                    conf.put(AcidUtil.VALID_TXNS_KEY, validTransactions.writeToString());
+                    conf.put(AcidUtil.VALID_WRITEIDS_KEY, writeIdList.writeToString());
+                    return conf;
                 });
             } catch (Exception e) {
                 client.setThrowable(e);
@@ -554,7 +596,14 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
             // Ignore this exception when the version of hive is not compatible with these apis.
             // Currently, the workaround is using a max watermark.
             LOG.warn("failed to get valid write ids for {}, transaction {}", fullTableName, currentTransactionId, e);
-            return new ValidReaderWriteIdList(fullTableName, new long[0], new BitSet(), Long.MAX_VALUE);
+
+            ValidTxnList validTransactions = new ValidReadTxnList(
+                    new long[0], new BitSet(), Long.MAX_VALUE, Long.MAX_VALUE);
+            ValidWriteIdList writeIdList = new ValidReaderWriteIdList(
+                    fullTableName, new long[0], new BitSet(), Long.MAX_VALUE);
+            conf.put(AcidUtil.VALID_TXNS_KEY, validTransactions.writeToString());
+            conf.put(AcidUtil.VALID_WRITEIDS_KEY, writeIdList.writeToString());
+            return conf;
         }
     }
 
@@ -661,7 +710,11 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
     }
 
     private <T> T ugiDoAs(PrivilegedExceptionAction<T> action) {
-        return HiveMetaStoreClientHelper.ugiDoAs(hiveConf, action);
+        try {
+            return hadoopAuthenticator.doAs(action);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -682,7 +735,7 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
             newTable.setParameters(newParams);
             client.client.alter_table(dbName, tableName, newTable);
         } catch (Exception e) {
-            throw new RuntimeException("failed to update table statistics for " + dbName + "." + tableName);
+            throw new RuntimeException("failed to update table statistics for " + dbName + "." + tableName, e);
         }
     }
 
@@ -710,7 +763,7 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
             modifiedPartition.setParameters(newParams);
             client.client.alter_partition(dbName, tableName, modifiedPartition);
         } catch (Exception e) {
-            throw new RuntimeException("failed to update table statistics for " + dbName + "." + tableName);
+            throw new RuntimeException("failed to update table statistics for " + dbName + "." + tableName, e);
         }
     }
 
@@ -731,7 +784,7 @@ public class ThriftHMSCachedClient implements HMSCachedClient {
         try (ThriftHMSClient client = getClient()) {
             client.client.dropPartition(dbName, tableName, partitionValues, deleteData);
         } catch (Exception e) {
-            throw new RuntimeException("failed to drop partition for " + dbName + "." + tableName);
+            throw new RuntimeException("failed to drop partition for " + dbName + "." + tableName, e);
         }
     }
 }

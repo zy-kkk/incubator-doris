@@ -487,6 +487,7 @@ public class RoutineLoadManager implements Writable {
         // check if be has idle slot
         readLock();
         try {
+            updateBeIdToMaxConcurrentTasks();
             Map<Long, Integer> beIdToConcurrentTasks = getBeCurrentTasksNumMap();
             int previousBeIdleTaskNum = 0;
 
@@ -831,7 +832,7 @@ public class RoutineLoadManager implements Writable {
     public void replayChangeRoutineLoadJob(RoutineLoadOperation operation) {
         RoutineLoadJob job = getJob(operation.getId());
         try {
-            job.updateState(operation.getJobState(), null, true /* is replay */);
+            job.updateState(operation.getJobState(), operation.getErrorReason(), true /* is replay */);
         } catch (UserException e) {
             LOG.error("should not happened", e);
         } catch (NullPointerException npe) {

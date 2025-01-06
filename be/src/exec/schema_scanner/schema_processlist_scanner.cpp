@@ -30,6 +30,7 @@
 #include "vec/data_types/data_type_factory.hpp"
 
 namespace doris {
+#include "common/compile_check_begin.h"
 
 std::vector<SchemaScanner::ColumnDesc> SchemaProcessListScanner::_s_processlist_columns = {
         {"CURRENT_CONNECTED", TYPE_VARCHAR, sizeof(StringRef), false},
@@ -56,14 +57,19 @@ Status SchemaProcessListScanner::start(RuntimeState* state) {
     TShowProcessListRequest request;
     request.__set_show_full_sql(true);
 
-    RETURN_IF_ERROR(SchemaHelper::show_process_list(*(_param->common_param->ip),
-                                                    _param->common_param->port, request,
-                                                    &_process_list_result));
+    for (const auto& fe_addr : _param->common_param->fe_addr_list) {
+        TShowProcessListResult tmp_ret;
+        RETURN_IF_ERROR(
+                SchemaHelper::show_process_list(fe_addr.hostname, fe_addr.port, request, &tmp_ret));
+        _process_list_result.process_list.insert(_process_list_result.process_list.end(),
+                                                 tmp_ret.process_list.begin(),
+                                                 tmp_ret.process_list.end());
+    }
 
     return Status::OK();
 }
 
-Status SchemaProcessListScanner::get_next_block(vectorized::Block* block, bool* eos) {
+Status SchemaProcessListScanner::get_next_block_internal(vectorized::Block* block, bool* eos) {
     if (!_is_init) {
         return Status::InternalError("call this before initial.");
     }
@@ -121,7 +127,7 @@ Status SchemaProcessListScanner::_fill_block_impl(vectorized::Block* block) {
                 datas[row_idx] = &int_vals[row_idx];
             } else if (_s_processlist_columns[col_idx].type == TYPE_DATETIMEV2) {
                 auto* dv = reinterpret_cast<DateV2Value<DateTimeV2ValueType>*>(&int_vals[row_idx]);
-                if (!dv->from_date_str(column_value.data(), column_value.size(), -1,
+                if (!dv->from_date_str(column_value.data(), (int)column_value.size(), -1,
                                        config::allow_zero_date)) {
                     return Status::InternalError(
                             "process list meet invalid data, column={}, data={}, reason={}",

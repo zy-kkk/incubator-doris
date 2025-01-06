@@ -49,7 +49,6 @@ import org.apache.doris.nereids.rules.Rule;
 import org.apache.doris.nereids.rules.RuleFactory;
 import org.apache.doris.nereids.rules.RuleSet;
 import org.apache.doris.nereids.rules.RuleType;
-import org.apache.doris.nereids.rules.analysis.BindRelation.CustomTableResolver;
 import org.apache.doris.nereids.rules.exploration.mv.InitMaterializationContextHook;
 import org.apache.doris.nereids.rules.rewrite.OneRewriteRuleFactory;
 import org.apache.doris.nereids.trees.plans.GroupPlan;
@@ -71,7 +70,6 @@ import org.junit.jupiter.api.Assertions;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -147,12 +145,6 @@ public class PlanChecker {
         return this;
     }
 
-    public PlanChecker customAnalyzer(Optional<CustomTableResolver> customTableResolver) {
-        this.cascadesContext.newAnalyzer(customTableResolver).analyze();
-        this.cascadesContext.toMemo();
-        return this;
-    }
-
     public PlanChecker customRewrite(CustomRewriter customRewriter) {
         Rewriter.getWholeTreeRewriterWithCustomJobs(cascadesContext,
                         ImmutableList.of(Rewriter.custom(RuleType.TEST_REWRITE, () -> customRewriter)))
@@ -181,7 +173,7 @@ public class PlanChecker {
         LogicalPlan command = parser.parseSingle(sql);
         NereidsPlanner planner = new NereidsPlanner(
                 new StatementContext(connectContext, new OriginStatement(sql, 0)));
-        planner.plan(command, PhysicalProperties.ANY, ExplainLevel.ALL_PLAN, true);
+        planner.planWithLock(command, PhysicalProperties.ANY, ExplainLevel.ALL_PLAN, true);
         this.cascadesContext = planner.getCascadesContext();
         return cascadesContext.getPlanProcesses();
     }
@@ -260,9 +252,25 @@ public class PlanChecker {
     public PlanChecker optimize() {
         cascadesContext.setJobContext(PhysicalProperties.GATHER);
         double now = System.currentTimeMillis();
-        new Optimizer(cascadesContext).execute();
+        try {
+            new Optimizer(cascadesContext).execute();
+        } finally {
+            // Mv rewrite add lock manually, so need release manually
+            cascadesContext.getStatementContext().releasePlannerResources();
+        }
         System.out.println("cascades:" + (System.currentTimeMillis() - now));
         return this;
+    }
+
+    public NereidsPlanner plan(String sql) {
+        StatementContext statementContext = new StatementContext(connectContext, new OriginStatement(sql, 0));
+        connectContext.setStatementContext(statementContext);
+        NereidsPlanner planner = new NereidsPlanner(statementContext);
+        LogicalPlan parsedPlan = new NereidsParser().parseSingle(sql);
+        LogicalPlanAdapter parsedPlanAdaptor = new LogicalPlanAdapter(parsedPlan, statementContext);
+        statementContext.setParsedStatement(parsedPlanAdaptor);
+        planner.plan(parsedPlanAdaptor);
+        return planner;
     }
 
     public PlanChecker dpHypOptimize() {

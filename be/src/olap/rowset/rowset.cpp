@@ -23,10 +23,9 @@
 #include "olap/segment_loader.h"
 #include "olap/tablet_schema.h"
 #include "util/time.h"
+#include "util/trace.h"
 
 namespace doris {
-
-static bvar::Adder<size_t> g_total_rowset_num("doris_total_rowset_num");
 
 Rowset::Rowset(const TabletSchemaSPtr& schema, RowsetMetaSharedPtr rowset_meta,
                std::string tablet_path)
@@ -55,11 +54,6 @@ Rowset::Rowset(const TabletSchemaSPtr& schema, RowsetMetaSharedPtr rowset_meta,
     }
     // build schema from RowsetMeta.tablet_schema or Tablet.tablet_schema
     _schema = _rowset_meta->tablet_schema() ? _rowset_meta->tablet_schema() : schema;
-    g_total_rowset_num << 1;
-}
-
-Rowset::~Rowset() {
-    g_total_rowset_num << -1;
 }
 
 Status Rowset::load(bool use_cache) {
@@ -118,8 +112,14 @@ std::string Rowset::get_rowset_info_str() {
 }
 
 void Rowset::clear_cache() {
-    SegmentLoader::instance()->erase_segments(rowset_id(), num_segments());
-    clear_inverted_index_cache();
+    {
+        SCOPED_SIMPLE_TRACE_IF_TIMEOUT(std::chrono::seconds(1));
+        SegmentLoader::instance()->erase_segments(rowset_id(), num_segments());
+    }
+    {
+        SCOPED_SIMPLE_TRACE_IF_TIMEOUT(std::chrono::seconds(1));
+        clear_inverted_index_cache();
+    }
 }
 
 Result<std::string> Rowset::segment_path(int64_t seg_id) {

@@ -42,7 +42,6 @@
 #include "vec/utils/template_helpers.hpp"
 
 namespace doris::vectorized {
-
 // Arithmetic operations: +, -, *, |, &, ^, ~
 // need implement apply(a, b)
 
@@ -166,7 +165,7 @@ struct BinaryOperationImpl {
 
     static ColumnPtr adapt_normal_vector_constant(ColumnPtr column_left, B b) {
         auto column_left_ptr =
-                check_and_get_column<typename Base::Traits::ColumnVectorA>(column_left);
+                check_and_get_column<typename Base::Traits::ColumnVectorA>(column_left.get());
         auto column_result = Base::ColumnVectorResult::create(column_left->size());
         DCHECK(column_left_ptr != nullptr);
 
@@ -183,7 +182,7 @@ struct BinaryOperationImpl {
 
     static ColumnPtr adapt_normal_constant_vector(A a, ColumnPtr column_right) {
         auto column_right_ptr =
-                check_and_get_column<typename Base::Traits::ColumnVectorB>(column_right);
+                check_and_get_column<typename Base::Traits::ColumnVectorB>(column_right.get());
         auto column_result = Base::ColumnVectorResult::create(column_right->size());
         DCHECK(column_right_ptr != nullptr);
 
@@ -200,9 +199,9 @@ struct BinaryOperationImpl {
 
     static ColumnPtr adapt_normal_vector_vector(ColumnPtr column_left, ColumnPtr column_right) {
         auto column_left_ptr =
-                check_and_get_column<typename Base::Traits::ColumnVectorA>(column_left);
+                check_and_get_column<typename Base::Traits::ColumnVectorA>(column_left.get());
         auto column_right_ptr =
-                check_and_get_column<typename Base::Traits::ColumnVectorB>(column_right);
+                check_and_get_column<typename Base::Traits::ColumnVectorB>(column_right.get());
 
         auto column_result = Base::ColumnVectorResult::create(column_left->size());
         DCHECK(column_left_ptr != nullptr && column_right_ptr != nullptr);
@@ -413,13 +412,18 @@ public:
                                                      const ResultType& max_result_number,
                                                      const ResultType& scale_diff_multiplier,
                                                      DataTypePtr res_data_type) {
-        auto type_result = assert_cast<const DataTypeDecimal<ResultType>&>(*res_data_type);
+        auto type_result =
+                assert_cast<const DataTypeDecimal<ResultType>&, TypeCheckOnRelease::DISABLE>(
+                        *res_data_type);
         auto column_result = ColumnDecimal<ResultType>::create(
-                1, assert_cast<const DataTypeDecimal<ResultType>&>(*res_data_type).get_scale());
+                1, assert_cast<const DataTypeDecimal<ResultType>&, TypeCheckOnRelease::DISABLE>(
+                           *res_data_type)
+                           .get_scale());
 
         if constexpr (check_overflow && !is_to_null_type &&
                       ((!OpTraits::is_multiply && !OpTraits::is_plus_minus))) {
-            LOG(FATAL) << "Invalid function type!";
+            throw doris::Exception(ErrorCode::INTERNAL_ERROR,
+                                   "adapt_decimal_constant_constant Invalid function type!");
             return column_result;
         } else if constexpr (is_to_null_type) {
             auto null_map = ColumnUInt8::create(1, 0);
@@ -440,16 +444,22 @@ public:
                                                    const ResultType& max_result_number,
                                                    const ResultType& scale_diff_multiplier,
                                                    DataTypePtr res_data_type) {
-        auto type_result = assert_cast<const DataTypeDecimal<ResultType>&>(*res_data_type);
-        auto column_left_ptr = check_and_get_column<typename Traits::ColumnVectorA>(column_left);
+        auto type_result =
+                assert_cast<const DataTypeDecimal<ResultType>&, TypeCheckOnRelease::DISABLE>(
+                        *res_data_type);
+        auto column_left_ptr =
+                check_and_get_column<typename Traits::ColumnVectorA>(column_left.get());
         auto column_result = ColumnDecimal<ResultType>::create(
                 column_left->size(),
-                assert_cast<const DataTypeDecimal<ResultType>&>(*res_data_type).get_scale());
+                assert_cast<const DataTypeDecimal<ResultType>&, TypeCheckOnRelease::DISABLE>(
+                        *res_data_type)
+                        .get_scale());
         DCHECK(column_left_ptr != nullptr);
 
         if constexpr (check_overflow && !is_to_null_type &&
                       ((!OpTraits::is_multiply && !OpTraits::is_plus_minus))) {
-            LOG(FATAL) << "Invalid function type!";
+            throw doris::Exception(ErrorCode::INTERNAL_ERROR,
+                                   "adapt_decimal_vector_constant Invalid function type!");
             return column_result;
         } else if constexpr (is_to_null_type) {
             auto null_map = ColumnUInt8::create(column_left->size(), 0);
@@ -470,16 +480,22 @@ public:
                                                    const ResultType& max_result_number,
                                                    const ResultType& scale_diff_multiplier,
                                                    DataTypePtr res_data_type) {
-        auto type_result = assert_cast<const DataTypeDecimal<ResultType>&>(*res_data_type);
-        auto column_right_ptr = check_and_get_column<typename Traits::ColumnVectorB>(column_right);
+        auto type_result =
+                assert_cast<const DataTypeDecimal<ResultType>&, TypeCheckOnRelease::DISABLE>(
+                        *res_data_type);
+        auto column_right_ptr =
+                check_and_get_column<typename Traits::ColumnVectorB>(column_right.get());
         auto column_result = ColumnDecimal<ResultType>::create(
                 column_right->size(),
-                assert_cast<const DataTypeDecimal<ResultType>&>(*res_data_type).get_scale());
+                assert_cast<const DataTypeDecimal<ResultType>&, TypeCheckOnRelease::DISABLE>(
+                        *res_data_type)
+                        .get_scale());
         DCHECK(column_right_ptr != nullptr);
 
         if constexpr (check_overflow && !is_to_null_type &&
                       ((!OpTraits::is_multiply && !OpTraits::is_plus_minus))) {
-            LOG(FATAL) << "Invalid function type!";
+            throw doris::Exception(ErrorCode::INTERNAL_ERROR,
+                                   "adapt_decimal_constant_vector Invalid function type!");
             return column_result;
         } else if constexpr (is_to_null_type) {
             auto null_map = ColumnUInt8::create(column_right->size(), 0);
@@ -501,8 +517,10 @@ public:
                                                  const ResultType& max_result_number,
                                                  const ResultType& scale_diff_multiplier,
                                                  DataTypePtr res_data_type) {
-        auto column_left_ptr = check_and_get_column<typename Traits::ColumnVectorA>(column_left);
-        auto column_right_ptr = check_and_get_column<typename Traits::ColumnVectorB>(column_right);
+        auto column_left_ptr =
+                check_and_get_column<typename Traits::ColumnVectorA>(column_left.get());
+        auto column_right_ptr =
+                check_and_get_column<typename Traits::ColumnVectorB>(column_right.get());
 
         const auto& type_result = assert_cast<const DataTypeDecimal<ResultType>&>(*res_data_type);
         auto column_result =
@@ -511,7 +529,8 @@ public:
 
         if constexpr (check_overflow && !is_to_null_type &&
                       ((!OpTraits::is_multiply && !OpTraits::is_plus_minus))) {
-            LOG(FATAL) << "Invalid function type!";
+            throw doris::Exception(ErrorCode::INTERNAL_ERROR,
+                                   "adapt_decimal_vector_vector Invalid function type!");
             return column_result;
         } else if constexpr (is_to_null_type) {
             // function divide, modulo and pmod
@@ -832,8 +851,8 @@ private:
     static ColumnPtr constant_constant(ColumnPtr column_left, ColumnPtr column_right,
                                        const LeftDataType& type_left,
                                        const RightDataType& type_right, DataTypePtr res_data_type) {
-        auto column_left_ptr = check_and_get_column<ColumnConst>(column_left);
-        auto column_right_ptr = check_and_get_column<ColumnConst>(column_right);
+        const auto* column_left_ptr = check_and_get_column<ColumnConst>(column_left.get());
+        const auto* column_right_ptr = check_and_get_column<ColumnConst>(column_right.get());
         DCHECK(column_left_ptr != nullptr && column_right_ptr != nullptr);
 
         ColumnPtr column_result = nullptr;
@@ -860,7 +879,7 @@ private:
     static ColumnPtr vector_constant(ColumnPtr column_left, ColumnPtr column_right,
                                      const LeftDataType& type_left, const RightDataType& type_right,
                                      DataTypePtr res_data_type) {
-        auto column_right_ptr = check_and_get_column<ColumnConst>(column_right);
+        const auto* column_right_ptr = check_and_get_column<ColumnConst>(column_right.get());
         DCHECK(column_right_ptr != nullptr);
 
         if constexpr (result_is_decimal) {
@@ -879,7 +898,7 @@ private:
     static ColumnPtr constant_vector(ColumnPtr column_left, ColumnPtr column_right,
                                      const LeftDataType& type_left, const RightDataType& type_right,
                                      DataTypePtr res_data_type) {
-        auto column_left_ptr = check_and_get_column<ColumnConst>(column_left);
+        const auto* column_left_ptr = check_and_get_column<ColumnConst>(column_left.get());
         DCHECK(column_left_ptr != nullptr);
 
         if constexpr (result_is_decimal) {
@@ -1014,7 +1033,7 @@ public:
     }
 
     Status execute_impl(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                        size_t result, size_t input_rows_count) const override {
+                        uint32_t result, size_t input_rows_count) const override {
         auto* left_generic = block.get_by_position(arguments[0]).type.get();
         auto* right_generic = block.get_by_position(arguments[1]).type.get();
         auto* result_generic = block.get_by_position(result).type.get();

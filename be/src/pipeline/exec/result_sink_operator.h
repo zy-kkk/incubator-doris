@@ -17,11 +17,15 @@
 
 #pragma once
 
+#include <gen_cpp/PlanNodes_types.h>
+#include <stdint.h>
+
 #include "operator.h"
 #include "runtime/buffer_control_block.h"
 #include "runtime/result_writer.h"
 
 namespace doris {
+#include "common/compile_check_begin.h"
 class BufferControlBlock;
 
 namespace pipeline {
@@ -49,11 +53,13 @@ struct ResultFileOptions {
     //Now the code version is 1.1.2, so when the version is after 1.2, could remove this code.
     bool is_refactor_before_flag = false;
     std::string orc_schema;
+    TFileCompressType::type orc_compression_type;
 
     bool delete_existing_files = false;
     std::string file_suffix;
     //Bring BOM when exporting to CSV format
     bool with_bom = false;
+    int64_t orc_writer_version = 0;
 
     ResultFileOptions(const TResultFileSinkOptions& t_opt) {
         file_path = t_opt.file_path;
@@ -101,6 +107,12 @@ struct ResultFileOptions {
         if (t_opt.__isset.orc_schema) {
             orc_schema = t_opt.orc_schema;
         }
+        if (t_opt.__isset.orc_compression_type) {
+            orc_compression_type = t_opt.orc_compression_type;
+        }
+        if (t_opt.__isset.orc_writer_version) {
+            orc_writer_version = t_opt.orc_writer_version;
+        }
     }
 };
 
@@ -117,8 +129,6 @@ public:
     Status init(RuntimeState* state, LocalSinkStateInfo& info) override;
     Status open(RuntimeState* state) override;
     Status close(RuntimeState* state, Status exec_status) override;
-    RuntimeProfile::Counter* blocks_sent_counter() { return _blocks_sent_counter; }
-    RuntimeProfile::Counter* rows_sent_counter() { return _rows_sent_counter; }
 
 private:
     friend class ResultSinkOperatorX;
@@ -127,15 +137,15 @@ private:
 
     std::shared_ptr<BufferControlBlock> _sender = nullptr;
     std::shared_ptr<ResultWriter> _writer = nullptr;
-    RuntimeProfile::Counter* _blocks_sent_counter = nullptr;
-    RuntimeProfile::Counter* _rows_sent_counter = nullptr;
+
+    RuntimeProfile::Counter* _fetch_row_id_timer = nullptr;
+    RuntimeProfile::Counter* _write_data_timer = nullptr;
 };
 
 class ResultSinkOperatorX final : public DataSinkOperatorX<ResultSinkLocalState> {
 public:
     ResultSinkOperatorX(int operator_id, const RowDescriptor& row_desc,
                         const std::vector<TExpr>& select_exprs, const TResultSink& sink);
-    Status prepare(RuntimeState* state) override;
     Status open(RuntimeState* state) override;
 
     Status sink(RuntimeState* state, vectorized::Block* in_block, bool eos) override;
@@ -145,6 +155,7 @@ private:
 
     Status _second_phase_fetch_data(RuntimeState* state, vectorized::Block* final_block);
     TResultSinkType::type _sink_type;
+    int _result_sink_buffer_size_rows;
     // set file options when sink type is FILE
     std::unique_ptr<ResultFileOptions> _file_opts = nullptr;
 
@@ -162,4 +173,5 @@ private:
 };
 
 } // namespace pipeline
+#include "common/compile_check_end.h"
 } // namespace doris

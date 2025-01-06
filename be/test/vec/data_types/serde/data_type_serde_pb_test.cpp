@@ -404,7 +404,7 @@ inline void serialize_and_deserialize_pb_test() {
         vectorized::DataTypePtr nullable_data_type(
                 std::make_shared<vectorized::DataTypeNullable>(string_data_type));
         auto nullable_column = nullable_data_type->create_column();
-        ((vectorized::ColumnNullable*)nullable_column.get())->insert_null_elements(1024);
+        ((vectorized::ColumnNullable*)nullable_column.get())->insert_many_defaults(1024);
         check_pb_col(nullable_data_type, *nullable_column.get());
     }
     // nullable decimal
@@ -414,7 +414,7 @@ inline void serialize_and_deserialize_pb_test() {
         vectorized::DataTypePtr nullable_data_type(
                 std::make_shared<vectorized::DataTypeNullable>(decimal_data_type));
         auto nullable_column = nullable_data_type->create_column();
-        ((vectorized::ColumnNullable*)nullable_column.get())->insert_null_elements(1024);
+        ((vectorized::ColumnNullable*)nullable_column.get())->insert_many_defaults(1024);
         check_pb_col(nullable_data_type, *nullable_column.get());
     }
     // int with 1024 batch size
@@ -583,10 +583,10 @@ TEST(DataTypeSerDePbTest, DataTypeScalaSerDeTestStruct) {
     DataTypePtr m = std::make_shared<DataTypeNullable>(std::make_shared<DataTypeUInt8>());
     DataTypePtr st = std::make_shared<DataTypeStruct>(std::vector<DataTypePtr> {s, d, m});
     Tuple t1, t2;
-    t1.push_back(String("amory cute"));
+    t1.push_back(Field(String("amory cute")));
     t1.push_back(__int128_t(37));
     t1.push_back(true);
-    t2.push_back("null");
+    t2.push_back(Field("null"));
     t2.push_back(__int128_t(26));
     t2.push_back(false);
     MutableColumnPtr struct_column = st->create_column();
@@ -614,7 +614,7 @@ TEST(DataTypeSerDePbTest, DataTypeScalaSerDeTestStruct2) {
     DataTypePtr m = std::make_shared<DataTypeNullable>(std::make_shared<DataTypeUInt8>());
     DataTypePtr st = std::make_shared<DataTypeStruct>(std::vector<DataTypePtr> {s, d, m});
     Tuple t1, t2;
-    t1.push_back(String("amory cute"));
+    t1.push_back(Field(String("amory cute")));
     t1.push_back(37);
     t1.push_back(true);
     t2.push_back("null");

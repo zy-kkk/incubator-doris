@@ -118,6 +118,16 @@ enum TStorageBackendType {
     AZURE
 }
 
+// Enumerates the storage formats for inverted indexes in src_backends.
+// This enum is used to distinguish between different organizational methods
+// of inverted index data, affecting how the index is stored and accessed.
+enum TInvertedIndexFileStorageFormat {
+    DEFAULT = 0, // Default format, unspecified storage method.
+    V1 = 1,      // Index per idx: Each index is stored separately based on its identifier.
+    V2 = 2       // Segment id per idx: Indexes are organized based on segment identifiers, grouping indexes by their associated segment.
+    V3 = 3       // Position and dictionary compression
+}
+
 struct TScalarType {
     1: required TPrimitiveType type
 
@@ -227,6 +237,7 @@ enum TTaskType {
     GC_BINLOG,
     CLEAN_TRASH,
     UPDATE_VISIBLE_VERSION,
+    CLEAN_UDF_CACHE,
 
     // CLOUD
     CALCULATE_DELETE_BITMAP = 1000
@@ -386,6 +397,8 @@ struct TFunction {
   12: optional string checksum
   13: optional bool vectorized = false
   14: optional bool is_udtf_function = false
+  15: optional bool is_static_load = false
+  16: optional i64 expiration_time //minutes
 }
 
 enum TJdbcOperation {
@@ -407,7 +420,8 @@ enum TOdbcTableType {
     OCEANBASE,
     OCEANBASE_ORACLE,
     NEBULA, // Deprecated
-    DB2
+    DB2,
+    GBASE
 }
 
 struct TJdbcExecutorCtorParams {
@@ -705,6 +719,12 @@ enum TMergeType {
   DELETE
 }
 
+enum TUniqueKeyUpdateMode {
+  UPSERT,
+  UPDATE_FIXED_COLUMNS,
+  UPDATE_FLEXIBLE_COLUMNS
+}
+
 enum TSortType {
     LEXICAL,
     ZORDER,
@@ -719,11 +739,18 @@ enum TMetadataType {
   MATERIALIZED_VIEWS,
   JOBS,
   TASKS,
-  WORKLOAD_SCHED_POLICY
+  WORKLOAD_SCHED_POLICY,
+  PARTITIONS,
+  PARTITION_VALUES,
+  HUDI,
 }
 
 enum TIcebergQueryType {
   SNAPSHOTS
+}
+
+enum THudiQueryType {
+  TIMELINE
 }
 
 // represent a user identity

@@ -24,7 +24,7 @@ suite("nereids_partial_update_native_insert_stmt", "p0") {
     for (def use_row_store : [false, true]) {
         logger.info("current params: use_row_store: ${use_row_store}")
 
-        connect(user = context.config.jdbcUser, password = context.config.jdbcPassword, url = context.config.jdbcUrl) {
+        connect( context.config.jdbcUser, context.config.jdbcPassword, context.config.jdbcUrl) {
             sql "use ${db};"
 
             sql "set enable_nereids_dml=true;"
@@ -56,7 +56,7 @@ suite("nereids_partial_update_native_insert_stmt", "p0") {
             qt_1 """ select * from ${tableName} order by id; """
             test {
                 sql """insert into ${tableName} values(2,400),(1,200),(4,400)"""
-                exception "You must explicitly specify the columns to be updated when updating partial columns using the INSERT statement."
+                exception "Column count doesn't match value count"
             }
             sql "set enable_unique_key_partial_update=false;"
             sql "sync;"
@@ -281,7 +281,6 @@ suite("nereids_partial_update_native_insert_stmt", "p0") {
 
             sql "set enable_unique_key_partial_update=false;"
             sql "set enable_insert_strict = false;"
-            sql "set enable_fallback_to_original_planner=true;"
             sql "sync;"
         }
     }

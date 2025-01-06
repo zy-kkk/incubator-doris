@@ -24,14 +24,13 @@
 #include "pipeline/exec/hashjoin_build_sink.h"
 #include "pipeline/exec/hashjoin_probe_operator.h"
 #include "pipeline/exec/join_build_sink_operator.h"
-#include "vec/runtime/partitioner.h"
+#include "pipeline/exec/spill_utils.h"
 
 namespace doris {
+#include "common/compile_check_begin.h"
 class RuntimeState;
 
 namespace pipeline {
-
-using PartitionerType = vectorized::Crc32HashPartitioner<vectorized::SpillPartitionChannelIds>;
 
 class PartitionedHashJoinProbeOperatorX;
 
@@ -84,7 +83,7 @@ private:
 
     std::vector<vectorized::SpillStreamSPtr> _probe_spilling_streams;
 
-    std::unique_ptr<PartitionerType> _partitioner;
+    std::unique_ptr<vectorized::PartitionerBase> _partitioner;
     std::unique_ptr<RuntimeState> _runtime_state;
     std::unique_ptr<RuntimeProfile> _internal_runtime_profile;
 
@@ -145,7 +144,6 @@ public:
     PartitionedHashJoinProbeOperatorX(ObjectPool* pool, const TPlanNode& tnode, int operator_id,
                                       const DescriptorTbl& descs, uint32_t partition_count);
     Status init(const TPlanNode& tnode, RuntimeState* state) override;
-    Status prepare(RuntimeState* state) override;
     Status open(RuntimeState* state) override;
 
     [[nodiscard]] Status get_block(RuntimeState* state, vectorized::Block* block,
@@ -168,7 +166,7 @@ public:
                                            _distribution_partition_exprs));
     }
 
-    bool is_shuffled_hash_join() const override {
+    bool is_shuffled_operator() const override {
         return _join_distribution == TJoinDistributionType::PARTITIONED;
     }
 
@@ -212,7 +210,9 @@ private:
     const DescriptorTbl _descriptor_tbl;
 
     const uint32_t _partition_count;
+    std::unique_ptr<vectorized::PartitionerBase> _partitioner;
 };
 
 } // namespace pipeline
+#include "common/compile_check_end.h"
 } // namespace doris

@@ -36,6 +36,7 @@
 #include "vec/data_types/data_type.h"
 #include "vec/data_types/data_type_array.h"
 #include "vec/data_types/data_type_nullable.h"
+#include "vec/data_types/data_type_number.h"
 #include "vec/functions/function.h"
 #include "vec/functions/simple_function_factory.h"
 
@@ -59,16 +60,19 @@ public:
 
     bool use_default_implementation_for_nulls() const override { return false; }
 
-    size_t get_number_of_arguments() const override { return 1; }
+    size_t get_number_of_arguments() const override { return 0; }
 
     DataTypePtr get_return_type_impl(const DataTypes& arguments) const override {
-        DCHECK(!arguments.empty())
-                << "function: " << get_name() << ", arguments should not be empty";
+        // we accept with empty argument, like array(), which will be treated as array(UInt8)
+        if (arguments.empty()) {
+            return std::make_shared<DataTypeArray>(
+                    make_nullable(std::make_shared<DataTypeUInt8>()));
+        }
         return std::make_shared<DataTypeArray>(make_nullable(remove_nullable(arguments[0])));
     }
 
     Status execute_impl(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                        size_t result, size_t input_rows_count) const override {
+                        uint32_t result, size_t input_rows_count) const override {
         size_t num_element = arguments.size();
         auto result_col = block.get_by_position(result).type->create_column();
         auto* result_array_col = static_cast<ColumnArray*>(result_col.get());

@@ -44,6 +44,9 @@ namespace doris {
 static uint8_t NEXT_TWO_BYTE = 252;
 static uint8_t NEXT_THREE_BYTE = 253;
 static uint8_t NEXT_EIGHT_BYTE = 254;
+// the EXTRA_RESERVE_BYTE wanner to make sure _pos pointer is always in _buf memory
+// used in reserve() for allocate current buffer
+static size_t EXTRA_RESERVE_BYTE = 16;
 
 // the first byte:
 // <= 250: length
@@ -84,9 +87,9 @@ MysqlRowBuffer<is_binary_format>::MysqlRowBuffer()
           _len_pos(0) {}
 
 template <bool is_binary_format>
-void MysqlRowBuffer<is_binary_format>::start_binary_row(uint32_t num_cols) {
+void MysqlRowBuffer<is_binary_format>::start_binary_row(uint64_t num_cols) {
     assert(is_binary_format);
-    int bit_fields = (num_cols + 9) / 8;
+    auto bit_fields = (num_cols + 9) / 8;
     reserve(bit_fields + 1);
     memset(_pos, 0, 1 + bit_fields);
     _pos += bit_fields + 1;
@@ -104,7 +107,11 @@ MysqlRowBuffer<is_binary_format>::~MysqlRowBuffer() {
 template <bool is_binary_format>
 void MysqlRowBuffer<is_binary_format>::open_dynamic_mode() {
     if (!_dynamic_mode) {
-        *_pos++ = NEXT_EIGHT_BYTE;
+        // if _pos now exactly at the end of _buf memory,
+        // we should reserve 1 byte for _dynamic_mode flag byte to avoid *pos = 254
+        // cause _dynamic_mode flag byte be overwritten
+        reserve(1);
+        *_pos++ = NEXT_EIGHT_BYTE; // *_pos = 254 ; _pos++
         // write length when dynamic mode close
         _len_pos = (_pos - _buf);
         _pos = _pos + 8;
@@ -133,7 +140,7 @@ int MysqlRowBuffer<is_binary_format>::reserve(int64_t size) {
         return 0;
     }
 
-    int64_t alloc_size = std::max(need_size, _buf_size * 2);
+    int64_t alloc_size = std::max(need_size, _buf_size * 2) + EXTRA_RESERVE_BYTE;
     char* new_buf = new char[alloc_size];
 
     size_t offset = _pos - _buf;

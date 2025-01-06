@@ -20,6 +20,7 @@ package org.apache.doris.qe;
 import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.Queriable;
 import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.catalog.Type;
 import org.apache.doris.planner.OlapScanNode;
 import org.apache.doris.planner.Planner;
 import org.apache.doris.thrift.TExpr;
@@ -36,6 +37,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 public class ShortCircuitQueryContext {
     // Cached for better CPU performance, since serialize DescriptorTable and
@@ -56,8 +58,25 @@ public class ShortCircuitQueryContext {
     public final Queriable analzyedQuery;
     // Serialized mysql Field, this could avoid serialize mysql field each time sendFields.
     // Since, serialize fields is too heavy when table is wide
-    public Map<String, byte[]> serializedFields =  Maps.newHashMap();
+    Map<Integer, byte[]> serializedFields = Maps.newHashMap();
 
+    List<Type> returnTypes = null;
+
+    public byte[] getSerializedField(int idx) {
+        return serializedFields.getOrDefault(idx, null);
+    }
+
+    public void addSerializedField(int idx, byte[] serializedField) {
+        serializedFields.put(idx, serializedField);
+    }
+
+    List<Type> getReturnTypes() {
+        if (returnTypes == null) {
+            returnTypes = analzyedQuery.getResultExprs()
+                    .stream().map(e -> e.getType()).collect(Collectors.toList());
+        }
+        return returnTypes;
+    }
 
     public ShortCircuitQueryContext(Planner planner, Queriable analzyedQuery) throws TException {
         this.serializedDescTable = ByteString.copyFrom(
@@ -66,8 +85,15 @@ public class ShortCircuitQueryContext {
         this.serializedQueryOptions = ByteString.copyFrom(
                 new TSerializer().serialize(options));
         List<TExpr> exprs = new ArrayList<>();
-        for (Expr expr : planner.getFragments().get(1).getPlanRoot().getProjectList()) {
-            exprs.add(expr.treeToThrift());
+        OlapScanNode olapScanNode = (OlapScanNode) planner.getFragments().get(1).getPlanRoot();
+        if (olapScanNode.getProjectList() != null) {
+            // project on scan node
+            exprs.addAll(olapScanNode.getProjectList().stream()
+                    .map(Expr::treeToThrift).collect(Collectors.toList()));
+        } else {
+            // add output slots
+            exprs.addAll(planner.getFragments().get(0).getOutputExprs().stream()
+                    .map(Expr::treeToThrift).collect(Collectors.toList()));
         }
         TExprList exprList = new TExprList(exprs);
         serializedOutputExpr = ByteString.copyFrom(

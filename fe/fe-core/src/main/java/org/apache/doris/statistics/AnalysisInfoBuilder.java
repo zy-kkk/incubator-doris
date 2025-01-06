@@ -19,7 +19,6 @@ package org.apache.doris.statistics;
 
 import org.apache.doris.common.Pair;
 import org.apache.doris.statistics.AnalysisInfo.AnalysisMethod;
-import org.apache.doris.statistics.AnalysisInfo.AnalysisMode;
 import org.apache.doris.statistics.AnalysisInfo.AnalysisType;
 import org.apache.doris.statistics.AnalysisInfo.JobType;
 import org.apache.doris.statistics.AnalysisInfo.ScheduleType;
@@ -42,7 +41,6 @@ public class AnalysisInfoBuilder {
     private String colName;
     private long indexId = -1L;
     private JobType jobType;
-    private AnalysisMode analysisMode;
     private AnalysisMethod analysisMethod;
     private AnalysisType analysisType;
     private int maxBucketNum;
@@ -63,10 +61,12 @@ public class AnalysisInfoBuilder {
     private boolean usingSqlForExternalTable;
     private long tblUpdateTime;
     private long rowCount;
-    private boolean userInject;
+    private boolean userInject = false;
     private long updateRows;
+    private long tableVersion;
     private JobPriority priority;
     private Map<Long, Long> partitionUpdateRows;
+    private boolean enablePartition;
 
     public AnalysisInfoBuilder() {
     }
@@ -83,7 +83,6 @@ public class AnalysisInfoBuilder {
         colName = info.colName;
         indexId = info.indexId;
         jobType = info.jobType;
-        analysisMode = info.analysisMode;
         analysisMethod = info.analysisMethod;
         analysisType = info.analysisType;
         samplePercent = info.samplePercent;
@@ -106,8 +105,10 @@ public class AnalysisInfoBuilder {
         rowCount = info.rowCount;
         userInject = info.userInject;
         updateRows = info.updateRows;
+        tableVersion = info.tableVersion;
         priority = info.priority;
         partitionUpdateRows = info.partitionUpdateRows;
+        enablePartition = info.enablePartition;
     }
 
     public AnalysisInfoBuilder setJobId(long jobId) {
@@ -162,11 +163,6 @@ public class AnalysisInfoBuilder {
 
     public AnalysisInfoBuilder setJobType(JobType jobType) {
         this.jobType = jobType;
-        return this;
-    }
-
-    public AnalysisInfoBuilder setAnalysisMode(AnalysisMode analysisMode) {
-        this.analysisMode = analysisMode;
         return this;
     }
 
@@ -280,6 +276,11 @@ public class AnalysisInfoBuilder {
         return this;
     }
 
+    public AnalysisInfoBuilder setTableVersion(long tableVersion) {
+        this.tableVersion = tableVersion;
+        return this;
+    }
+
     public AnalysisInfoBuilder setPriority(JobPriority priority) {
         this.priority = priority;
         return this;
@@ -290,13 +291,18 @@ public class AnalysisInfoBuilder {
         return this;
     }
 
+    public AnalysisInfoBuilder setEnablePartition(boolean enablePartition) {
+        this.enablePartition = enablePartition;
+        return this;
+    }
+
     public AnalysisInfo build() {
         return new AnalysisInfo(jobId, taskId, taskIds, catalogId, dbId, tblId, jobColumns, partitionNames,
-                colName, indexId, jobType, analysisMode, analysisMethod, analysisType, samplePercent,
+                colName, indexId, jobType, analysisMethod, analysisType, samplePercent,
                 sampleRows, maxBucketNum, periodTimeInMs, message, lastExecTimeInMs, timeCostInMs, state, scheduleType,
                 partitionOnly, samplingPartition, isAllPartition, partitionCount,
                 cronExpression, forceFull, usingSqlForExternalTable, tblUpdateTime, rowCount, userInject, updateRows,
-                priority, partitionUpdateRows);
+                tableVersion, priority, partitionUpdateRows, enablePartition);
     }
 
 }

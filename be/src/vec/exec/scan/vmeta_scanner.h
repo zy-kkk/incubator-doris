@@ -41,7 +41,6 @@ class TupleDescriptor;
 namespace vectorized {
 class Block;
 class VExprContext;
-class VMetaScanNode;
 } // namespace vectorized
 } // namespace doris
 
@@ -57,7 +56,7 @@ public:
 
     Status open(RuntimeState* state) override;
     Status close(RuntimeState* state) override;
-    Status prepare(RuntimeState* state, const VExprContextSPtrs& conjuncts);
+    Status prepare(RuntimeState* state, const VExprContextSPtrs& conjuncts) override;
 
 protected:
     Status _get_block_impl(RuntimeState* state, Block* block, bool* eos) override;
@@ -67,13 +66,13 @@ private:
     Status _fetch_metadata(const TMetaScanRange& meta_scan_range);
     Status _build_iceberg_metadata_request(const TMetaScanRange& meta_scan_range,
                                            TFetchSchemaTableDataRequest* request);
+    Status _build_hudi_metadata_request(const TMetaScanRange& meta_scan_range,
+                                        TFetchSchemaTableDataRequest* request);
     Status _build_backends_metadata_request(const TMetaScanRange& meta_scan_range,
                                             TFetchSchemaTableDataRequest* request);
     Status _build_frontends_metadata_request(const TMetaScanRange& meta_scan_range,
                                              TFetchSchemaTableDataRequest* request);
     Status _build_frontends_disks_metadata_request(const TMetaScanRange& meta_scan_range,
-                                                   TFetchSchemaTableDataRequest* request);
-    Status _build_workload_groups_metadata_request(const TMetaScanRange& meta_scan_range,
                                                    TFetchSchemaTableDataRequest* request);
     Status _build_workload_sched_policy_metadata_request(const TMetaScanRange& meta_scan_range,
                                                          TFetchSchemaTableDataRequest* request);
@@ -81,13 +80,16 @@ private:
                                             TFetchSchemaTableDataRequest* request);
     Status _build_materialized_views_metadata_request(const TMetaScanRange& meta_scan_range,
                                                       TFetchSchemaTableDataRequest* request);
+    Status _build_partitions_metadata_request(const TMetaScanRange& meta_scan_range,
+                                              TFetchSchemaTableDataRequest* request);
     Status _build_jobs_metadata_request(const TMetaScanRange& meta_scan_range,
                                         TFetchSchemaTableDataRequest* request);
     Status _build_tasks_metadata_request(const TMetaScanRange& meta_scan_range,
                                          TFetchSchemaTableDataRequest* request);
     Status _build_queries_metadata_request(const TMetaScanRange& meta_scan_range,
                                            TFetchSchemaTableDataRequest* request);
-
+    Status _build_partition_values_metadata_request(const TMetaScanRange& meta_scan_range,
+                                                    TFetchSchemaTableDataRequest* request);
     bool _meta_eos;
     TupleId _tuple_id;
     TUserIdentity _user_identity;

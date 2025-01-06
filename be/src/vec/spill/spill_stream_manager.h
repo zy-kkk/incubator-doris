@@ -28,6 +28,7 @@
 #include "util/threadpool.h"
 #include "vec/spill/spill_stream.h"
 namespace doris {
+#include "common/compile_check_begin.h"
 class RuntimeProfile;
 
 namespace vectorized {
@@ -77,7 +78,7 @@ private:
     double _get_disk_usage(int64_t incoming_data_size) const {
         return _disk_capacity_bytes == 0
                        ? 0
-                       : (_disk_capacity_bytes - _available_bytes + incoming_data_size) /
+                       : (double)(_disk_capacity_bytes - _available_bytes + incoming_data_size) /
                                  (double)_disk_capacity_bytes;
     }
 
@@ -119,8 +120,9 @@ public:
 
     // 创建SpillStream并登记
     Status register_spill_stream(RuntimeState* state, SpillStreamSPtr& spill_stream,
-                                 std::string query_id, std::string operator_name, int32_t node_id,
-                                 int32_t batch_rows, size_t batch_bytes, RuntimeProfile* profile);
+                                 const std::string& query_id, const std::string& operator_name,
+                                 int32_t node_id, int32_t batch_rows, size_t batch_bytes,
+                                 RuntimeProfile* profile);
 
     // 标记SpillStream需要被删除，在GC线程中异步删除落盘文件
     void delete_spill_stream(SpillStreamSPtr spill_stream);
@@ -146,3 +148,4 @@ private:
 };
 } // namespace vectorized
 } // namespace doris
+#include "common/compile_check_end.h"

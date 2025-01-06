@@ -18,6 +18,8 @@
 package org.apache.doris.statistics;
 
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.ClientPool;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.FeConstants;
@@ -91,6 +93,12 @@ public class StatisticsCache {
         if (ctx != null && ctx.getSessionVariable().internalSession) {
             return ColumnStatistic.UNKNOWN;
         }
+        // Need to change base index id to -1 for OlapTable.
+        try {
+            idxId = changeBaseIndexId(catalogId, dbId, tblId, idxId);
+        } catch (Exception e) {
+            return ColumnStatistic.UNKNOWN;
+        }
         StatisticsCacheKey k = new StatisticsCacheKey(catalogId, dbId, tblId, idxId, colName);
         try {
             CompletableFuture<Optional<ColumnStatistic>> f = columnStatisticsCache.get(k);
@@ -109,6 +117,12 @@ public class StatisticsCache {
         if (ctx != null && ctx.getSessionVariable().internalSession) {
             return PartitionColumnStatistic.UNKNOWN;
         }
+        // Need to change base index id to -1 for OlapTable.
+        try {
+            idxId = changeBaseIndexId(catalogId, dbId, tblId, idxId);
+        } catch (Exception e) {
+            return PartitionColumnStatistic.UNKNOWN;
+        }
         PartitionColumnStatisticCacheKey k = new PartitionColumnStatisticCacheKey(
                 catalogId, dbId, tblId, idxId, partName, colName);
         try {
@@ -120,6 +134,21 @@ public class StatisticsCache {
             LOG.warn("Unexpected exception while returning ColumnStatistic", e);
         }
         return PartitionColumnStatistic.UNKNOWN;
+    }
+
+    // Base index id should be set to -1 for OlapTable. Because statistics tables use -1 for base index.
+    // TODO: Need to use the real index id in statistics table in later version.
+    private long changeBaseIndexId(long catalogId, long dbId, long tblId, long idxId) {
+        if (idxId != -1) {
+            TableIf table = StatisticsUtil.findTable(catalogId, dbId, tblId);
+            if (table instanceof OlapTable) {
+                OlapTable olapTable = (OlapTable) table;
+                if (idxId == olapTable.getBaseIndexId()) {
+                    idxId = -1;
+                }
+            }
+        }
+        return idxId;
     }
 
     public Histogram getHistogram(long ctlId, long dbId, long tblId, String colName) {
@@ -221,10 +250,7 @@ public class StatisticsCache {
                 final StatisticsCacheKey k =
                         new StatisticsCacheKey(statsId.catalogId, statsId.dbId, statsId.tblId, statsId.idxId,
                                 statsId.colId);
-                ColumnStatistic c = ColumnStatistic.fromResultRow(r);
-                if (c.count > 0 && c.ndv == 0 && c.count != c.numNulls) {
-                    c = ColumnStatistic.UNKNOWN;
-                }
+                final ColumnStatistic c = ColumnStatistic.fromResultRow(r);
                 putCache(k, c);
             } catch (Throwable t) {
                 LOG.warn("Error when preheating stats cache. reason: [{}]. Row:[{}]", t.getMessage(), r);

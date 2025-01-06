@@ -316,10 +316,10 @@ Status DataDir::_check_incompatible_old_format_tablet() {
                                           std::string_view value) -> bool {
         // if strict check incompatible old format, then log fatal
         if (config::storage_strict_check_incompatible_old_format) {
-            LOG(FATAL)
-                    << "There are incompatible old format metas, current version does not support "
-                    << "and it may lead to data missing!!! "
-                    << "tablet_id = " << tablet_id << " schema_hash = " << schema_hash;
+            throw Exception(Status::FatalError(
+                    "There are incompatible old format metas, current version does not support and "
+                    "it may lead to data missing!!! tablet_id = {} schema_hash = {}",
+                    tablet_id, schema_hash));
         } else {
             LOG(WARNING)
                     << "There are incompatible old format metas, current version does not support "
@@ -451,7 +451,8 @@ Status DataDir::load() {
                      << ", loaded tablet: " << tablet_ids.size()
                      << ", error tablet: " << failed_tablet_ids.size() << ", path: " << _path;
         if (!config::ignore_load_tablet_failure) {
-            LOG(FATAL) << "load tablets encounter failure. stop BE process. path: " << _path;
+            throw Exception(Status::FatalError(
+                    "load tablets encounter failure. stop BE process. path: {}", _path));
         }
     }
     if (!load_tablet_status) {
@@ -495,10 +496,9 @@ Status DataDir::load() {
         }
     }
     if (rowset_partition_id_eq_0_num > config::ignore_invalid_partition_id_rowset_num) {
-        LOG(FATAL) << fmt::format(
-                "roswet partition id eq 0 is {} bigger than config {}, be exit, plz check be.INFO",
-                rowset_partition_id_eq_0_num, config::ignore_invalid_partition_id_rowset_num);
-        exit(-1);
+        throw Exception(Status::FatalError(
+                "rowset partition id eq 0 is {} bigger than config {}, be exit, plz check be.INFO",
+                rowset_partition_id_eq_0_num, config::ignore_invalid_partition_id_rowset_num));
     }
 
     // traverse rowset
@@ -906,8 +906,14 @@ void DataDir::disks_compaction_num_increment(int64_t delta) {
 }
 
 Status DataDir::move_to_trash(const std::string& tablet_path) {
-    Status res = Status::OK();
+    if (config::trash_file_expire_time_sec <= 0) {
+        LOG(INFO) << "delete tablet dir " << tablet_path
+                  << " directly due to trash_file_expire_time_sec is 0";
+        RETURN_IF_ERROR(io::global_local_filesystem()->delete_directory(tablet_path));
+        return delete_tablet_parent_path_if_empty(tablet_path);
+    }
 
+    Status res = Status::OK();
     // 1. get timestamp string
     string time_str;
     if ((res = gen_timestamp_string(&time_str)) != Status::OK()) {
@@ -1000,6 +1006,7 @@ void DataDir::perform_remote_rowset_gc() {
         auto st = fs->batch_delete(seg_paths);
         if (st.ok()) {
             deleted_keys.push_back(std::move(key));
+            unused_remote_rowset_num << -1;
         } else {
             LOG(WARNING) << "failed to delete remote rowset. err=" << st;
         }

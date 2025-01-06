@@ -28,7 +28,7 @@
 
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/config.h"
-#include "common/sync_point.h"
+#include "cpp/sync_point.h"
 #include "io/cache/block_file_cache.h"
 #include "io/cache/block_file_cache_factory.h"
 #include "io/cache/block_file_cache_profile.h"
@@ -43,6 +43,8 @@
 namespace doris::io {
 
 bvar::Adder<uint64_t> s3_read_counter("cached_remote_reader_s3_read");
+bvar::LatencyRecorder g_skip_cache_num("cached_remote_reader_skip_cache_num");
+bvar::Adder<uint64_t> g_skip_cache_sum("cached_remote_reader_skip_cache_sum");
 
 CachedRemoteFileReader::CachedRemoteFileReader(FileReaderSPtr remote_file_reader,
                                                const FileReaderOptions& opts)
@@ -124,7 +126,7 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result, size_t*
     ReadStatistics stats;
     auto defer_func = [&](int*) {
         if (io_ctx->file_cache_stats) {
-            _update_state(stats, io_ctx->file_cache_stats);
+            _update_state(stats, io_ctx->file_cache_stats, io_ctx->is_inverted_index);
             io::FileCacheProfile::instance().update(io_ctx->file_cache_stats);
         }
     };
@@ -132,6 +134,7 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result, size_t*
     stats.bytes_read += bytes_req;
     if (config::enable_read_cache_file_directly) {
         // read directly
+        SCOPED_RAW_TIMER(&stats.read_cache_file_directly_timer);
         size_t need_read_size = bytes_req;
         std::shared_lock lock(_mtx);
         if (!_cache_file_readers.empty()) {
@@ -172,8 +175,12 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result, size_t*
     // read from cache or remote
     auto [align_left, align_size] = s_align_size(offset, bytes_req, size());
     CacheContext cache_context(io_ctx);
+    cache_context.stats = &stats;
+    MonotonicStopWatch sw;
+    sw.start();
     FileBlocksHolder holder =
             _cache->get_or_set(_cache_hash, align_left, align_size, cache_context);
+    stats.cache_get_or_set_timer += sw.elapsed_time();
     std::vector<FileBlockSPtr> empty_blocks;
     for (auto& block : holder.file_blocks) {
         switch (block->state()) {
@@ -222,7 +229,7 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result, size_t*
                 st = block->finalize();
             }
             if (!st.ok()) {
-                LOG_WARNING("Write data to file cache failed").error(st);
+                LOG_EVERY_N(WARNING, 100) << "Write data to file cache failed. err=" << st.msg();
             } else {
                 _insert_file_reader(block);
             }
@@ -290,6 +297,8 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result, size_t*
                                  file_offset);
             }
             if (!st || block_state != FileBlock::State::DOWNLOADED) {
+                LOG(WARNING) << "Read data failed from file cache downloaded by others. err="
+                             << st.msg() << ", block state=" << block_state;
                 size_t bytes_read {0};
                 stats.hit_cache = false;
                 s3_read_counter << 1;
@@ -308,7 +317,8 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result, size_t*
 }
 
 void CachedRemoteFileReader::_update_state(const ReadStatistics& read_stats,
-                                           FileCacheStatistics* statis) const {
+                                           FileCacheStatistics* statis,
+                                           bool is_inverted_index) const {
     if (statis == nullptr) {
         return;
     }
@@ -316,6 +326,9 @@ void CachedRemoteFileReader::_update_state(const ReadStatistics& read_stats,
         statis->num_local_io_total++;
         statis->bytes_read_from_local += read_stats.bytes_read;
     } else {
+        if (is_inverted_index) {
+            statis->num_inverted_index_remote_io_total++;
+        }
         statis->num_remote_io_total++;
         statis->bytes_read_from_remote += read_stats.bytes_read;
     }
@@ -324,6 +337,15 @@ void CachedRemoteFileReader::_update_state(const ReadStatistics& read_stats,
     statis->num_skip_cache_io_total += read_stats.skip_cache;
     statis->bytes_write_into_cache += read_stats.bytes_write_into_file_cache;
     statis->write_cache_io_timer += read_stats.local_write_timer;
+
+    statis->read_cache_file_directly_timer += read_stats.read_cache_file_directly_timer;
+    statis->cache_get_or_set_timer += read_stats.cache_get_or_set_timer;
+    statis->lock_wait_timer += read_stats.lock_wait_timer;
+    statis->get_timer += read_stats.get_timer;
+    statis->set_timer += read_stats.set_timer;
+
+    g_skip_cache_num << read_stats.skip_cache;
+    g_skip_cache_sum << read_stats.skip_cache;
 }
 
 } // namespace doris::io

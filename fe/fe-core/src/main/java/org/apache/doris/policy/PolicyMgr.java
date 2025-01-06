@@ -171,11 +171,7 @@ public class PolicyMgr implements Writable {
         }
     }
 
-    /**
-     * Drop policy through stmt.
-     **/
-    public void dropPolicy(DropPolicyStmt stmt) throws DdlException, AnalysisException {
-        DropPolicyLog dropPolicyLog = DropPolicyLog.fromDropStmt(stmt);
+    public void dropPolicy(DropPolicyLog dropPolicyLog, boolean ifExists) throws DdlException, AnalysisException {
         if (dropPolicyLog.getType() == PolicyTypeEnum.STORAGE) {
             List<Database> databases = Env.getCurrentEnv().getInternalCatalog().getDbs();
             for (Database db : databases) {
@@ -198,7 +194,7 @@ public class PolicyMgr implements Writable {
         writeLock();
         try {
             if (!existPolicy(dropPolicyLog)) {
-                if (stmt.isIfExists()) {
+                if (ifExists) {
                     return;
                 }
                 throw new DdlException("the policy " + dropPolicyLog.getPolicyName() + " not exist");
@@ -208,6 +204,14 @@ public class PolicyMgr implements Writable {
         } finally {
             writeUnlock();
         }
+    }
+
+    /**
+     * Drop policy through stmt.
+     **/
+    public void dropPolicy(DropPolicyStmt stmt) throws DdlException, AnalysisException {
+        DropPolicyLog dropPolicyLog = DropPolicyLog.fromDropStmt(stmt);
+        dropPolicy(dropPolicyLog, stmt.isIfExists());
     }
 
     /**
@@ -731,7 +735,7 @@ public class PolicyMgr implements Writable {
         // log alter
         Env.getCurrentEnv().getEditLog().logAlterStoragePolicy(storagePolicy);
         AgentBatchTask batchTask = new AgentBatchTask();
-        for (long backendId : Env.getCurrentSystemInfo().getIdToBackend().keySet()) {
+        for (long backendId : Env.getCurrentSystemInfo().getAllBackendsByAllCluster().keySet()) {
             PushStoragePolicyTask pushStoragePolicyTask = new PushStoragePolicyTask(backendId,
                     Collections.singletonList(storagePolicy), Collections.emptyList(), Collections.emptyList());
             batchTask.addTask(pushStoragePolicyTask);

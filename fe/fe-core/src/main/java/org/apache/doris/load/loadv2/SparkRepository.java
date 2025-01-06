@@ -54,6 +54,7 @@ import java.util.Optional;
  *   * __archive_3_2_0/
  *     * ...
  */
+@Deprecated
 public class SparkRepository {
     private static final Logger LOG = LogManager.getLogger(SparkRepository.class);
 
@@ -166,7 +167,7 @@ public class SparkRepository {
         try {
             String remoteArchivePath = getRemoteArchivePath(currentDppVersion);
             if (isReplace) {
-                BrokerUtil.deletePath(remoteArchivePath, brokerDesc);
+                BrokerUtil.deletePathWithBroker(remoteArchivePath, brokerDesc);
                 currentArchive.libraries.clear();
             }
             String srcFilePath = null;

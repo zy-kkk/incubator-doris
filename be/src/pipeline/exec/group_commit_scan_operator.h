@@ -27,6 +27,7 @@
 #include "runtime/group_commit_mgr.h"
 
 namespace doris::pipeline {
+#include "common/compile_check_begin.h"
 
 class GroupCommitOperatorX;
 class GroupCommitLocalState final : public ScanLocalState<GroupCommitLocalState> {
@@ -37,9 +38,15 @@ public:
             : ScanLocalState(state, parent) {}
     Status init(RuntimeState* state, LocalStateInfo& info) override;
     std::shared_ptr<LoadBlockQueue> load_block_queue;
+    std::vector<Dependency*> dependencies() const override {
+        return {_scan_dependency.get(), _get_block_dependency.get()};
+    }
 
 private:
+    friend class GroupCommitOperatorX;
     Status _process_conjuncts(RuntimeState* state) override;
+
+    std::shared_ptr<Dependency> _get_block_dependency = nullptr;
 };
 
 class GroupCommitOperatorX final : public ScanOperatorX<GroupCommitLocalState> {
@@ -54,4 +61,5 @@ protected:
     const int64_t _table_id;
 };
 
+#include "common/compile_check_end.h"
 } // namespace doris::pipeline

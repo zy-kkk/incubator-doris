@@ -24,9 +24,9 @@ import org.apache.doris.mtmv.MTMVUtil;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import com.google.gson.annotations.SerializedName;
 
 import java.io.DataInput;
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,7 +37,9 @@ import java.util.stream.Collectors;
 public class ListPartitionItem extends PartitionItem {
     public static final ListPartitionItem DUMMY_ITEM = new ListPartitionItem(Lists.newArrayList());
 
+    @SerializedName(value = "partitionKeys")
     private final List<PartitionKey> partitionKeys;
+    @SerializedName(value = "idp")
     private boolean isDefaultPartition = false;
 
     public ListPartitionItem(List<PartitionKey> partitionKeys) {
@@ -56,6 +58,19 @@ public class ListPartitionItem extends PartitionItem {
 
     public List<PartitionKey> getItems() {
         return partitionKeys;
+    }
+
+    public String getItemsString() {
+        // ATTN: DO NOT EDIT unless unless you explicitly guarantee compatibility
+        // between different versions.
+        //
+        // the ccr syncer depends on this string to identify partitions between two
+        // clusters (cluster versions may be different).
+        return getItems().toString();
+    }
+
+    public String getItemsSql() {
+        return toSql();
     }
 
     @Override
@@ -111,21 +126,14 @@ public class ListPartitionItem extends PartitionItem {
                                 partitionKey.toString(),
                                 pos));
             }
-            if (!isDefaultPartition() && MTMVUtil.getExprTimeSec(partitionKey.getKeys().get(pos), dateFormatOptional)
-                    >= nowTruncSubSec) {
-                // As long as one of the partitionKeys meets the requirements, this partition needs to be retained
+            if (!isDefaultPartition()
+                    && MTMVUtil.getExprTimeSec(partitionKey.getKeys().get(pos), dateFormatOptional) >= nowTruncSubSec) {
+                // As long as one of the partitionKeys meets the requirements, this partition
+                // needs to be retained
                 return true;
             }
         }
         return false;
-    }
-
-    @Override
-    public void write(DataOutput out) throws IOException {
-        out.writeInt(partitionKeys.size());
-        for (PartitionKey partitionKey : partitionKeys) {
-            partitionKey.write(out);
-        }
     }
 
     @Override
@@ -181,10 +189,7 @@ public class ListPartitionItem extends PartitionItem {
 
     public String toSql() {
         StringBuilder sb = new StringBuilder();
-        int size = partitionKeys.size();
-        if (size > 1) {
-            sb.append("(");
-        }
+        sb.append("(");
 
         int i = 0;
         for (PartitionKey partitionKey : partitionKeys) {
@@ -195,9 +200,7 @@ public class ListPartitionItem extends PartitionItem {
             i++;
         }
 
-        if (size > 1) {
-            sb.append(")");
-        }
+        sb.append(")");
 
         return sb.toString();
     }

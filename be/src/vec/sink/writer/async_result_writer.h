@@ -19,7 +19,7 @@
 #include <concurrentqueue.h>
 
 #include <condition_variable>
-#include <queue>
+#include <queue> // IWYU pragma: keep
 
 #include "runtime/result_writer.h"
 #include "vec/exprs/vexpr_fwd.h"
@@ -33,7 +33,6 @@ class TDataSink;
 class TExpr;
 
 namespace pipeline {
-class AsyncWriterDependency;
 class Dependency;
 class PipelineTask;
 
@@ -50,14 +49,14 @@ class Block;
  *  pipeline execution engine performance.
  *
  *  The Sub class of AsyncResultWriter need to impl two virtual function
- *     * Status open() the first time IO work like: create file/ connect networking
+ *     * Status open() the first time IO work like: create file/ connect network
  *     * Status write() do the real IO work for block 
  */
 class AsyncResultWriter : public ResultWriter {
 public:
-    AsyncResultWriter(const VExprContextSPtrs& output_expr_ctxs);
-
-    void set_dependency(pipeline::AsyncWriterDependency* dep, pipeline::Dependency* finish_dep);
+    AsyncResultWriter(const VExprContextSPtrs& output_expr_ctxs,
+                      std::shared_ptr<pipeline::Dependency> dep,
+                      std::shared_ptr<pipeline::Dependency> fin_dep);
 
     void force_close(Status s);
 
@@ -65,7 +64,7 @@ public:
 
     virtual Status open(RuntimeState* state, RuntimeProfile* profile) = 0;
 
-    // sink the block date to date queue, it is async
+    // sink the block data to data queue, it is async
     Status sink(Block* block, bool eos);
 
     // Add the IO thread task process block() to thread pool to dispose the IO
@@ -77,7 +76,7 @@ protected:
     Status _projection_block(Block& input_block, Block* output_block);
     const VExprContextSPtrs& _vec_output_expr_ctxs;
 
-    std::unique_ptr<Block> _get_free_block(Block*, int rows);
+    std::unique_ptr<Block> _get_free_block(Block*, size_t rows);
 
     void _return_free_block(std::unique_ptr<Block>);
 
@@ -96,13 +95,9 @@ private:
     // Default value is ok
     AtomicStatus _writer_status;
     bool _eos = false;
-    // The writer is not started at the beginning. If prepare failed but not open, the the writer
-    // is not started, so should not pending finish on it.
-    bool _writer_thread_closed = true;
 
-    // Used by pipelineX
-    pipeline::AsyncWriterDependency* _dependency;
-    pipeline::Dependency* _finish_dependency;
+    std::shared_ptr<pipeline::Dependency> _dependency;
+    std::shared_ptr<pipeline::Dependency> _finish_dependency;
 
     moodycamel::ConcurrentQueue<std::unique_ptr<Block>> _free_blocks;
 };

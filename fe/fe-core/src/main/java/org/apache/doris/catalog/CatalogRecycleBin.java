@@ -32,6 +32,8 @@ import org.apache.doris.common.util.MasterDaemon;
 import org.apache.doris.common.util.RangeUtils;
 import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.persist.RecoverInfo;
+import org.apache.doris.persist.gson.GsonPostProcessable;
+import org.apache.doris.persist.gson.GsonUtils;
 import org.apache.doris.thrift.TStorageMedium;
 
 import com.google.common.base.Preconditions;
@@ -42,6 +44,7 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Table.Cell;
+import com.google.gson.annotations.SerializedName;
 import org.apache.commons.lang3.time.StopWatch;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -58,7 +61,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-public class CatalogRecycleBin extends MasterDaemon implements Writable {
+public class CatalogRecycleBin extends MasterDaemon implements Writable, GsonPostProcessable {
     private static final Logger LOG = LogManager.getLogger(CatalogRecycleBin.class);
     private static final int DEFAULT_INTERVAL_SECONDS = 30; // 30 seconds
     // erase meta at least after minEraseLatency milliseconds
@@ -68,8 +71,11 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
     private Map<Long, RecycleDatabaseInfo> idToDatabase;
     private Map<Long, RecycleTableInfo> idToTable;
     private Map<Long, RecyclePartitionInfo> idToPartition;
-
     private Map<Long, Long> idToRecycleTime;
+
+    // for compatible in the future
+    @SerializedName("u")
+    String unused;
 
     public CatalogRecycleBin() {
         super("recycle bin", FeConstants.runningUnitTest ? 10L : DEFAULT_INTERVAL_SECONDS * 1000L);
@@ -207,9 +213,16 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
         idToRecycleTime.put(id, recycleTime);
     }
 
+    public synchronized boolean isRecycleDatabase(long dbId) {
+        return idToDatabase.containsKey(dbId);
+    }
+
+    public synchronized boolean isRecycleTable(long dbId, long tableId) {
+        return isRecycleDatabase(dbId) || idToTable.containsKey(tableId);
+    }
+
     public synchronized boolean isRecyclePartition(long dbId, long tableId, long partitionId) {
-        return idToDatabase.containsKey(dbId) || idToTable.containsKey(tableId)
-                || idToPartition.containsKey(partitionId);
+        return isRecycleTable(dbId, tableId) || idToPartition.containsKey(partitionId);
     }
 
     public synchronized void getRecycleIds(Set<Long> dbIds, Set<Long> tableIds, Set<Long> partitionIds) {
@@ -761,7 +774,8 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
                 LOG.info("replay recover table[{}]", table.getId());
             } else {
                 // log
-                RecoverInfo recoverInfo = new RecoverInfo(db.getId(), table.getId(), -1L, "", newTableName, "");
+                RecoverInfo recoverInfo = new RecoverInfo(db.getId(), table.getId(),
+                                                    -1L, "", table.getName(), newTableName, "", "");
                 Env.getCurrentEnv().getEditLog().logRecoverTable(recoverInfo);
             }
             // Only olap table need recover dynamic partition, other table like jdbc odbc view.. do not need it
@@ -860,7 +874,8 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
         idToRecycleTime.remove(partitionId);
 
         // log
-        RecoverInfo recoverInfo = new RecoverInfo(dbId, table.getId(), partitionId, "", "", newPartitionName);
+        RecoverInfo recoverInfo = new RecoverInfo(dbId, table.getId(), partitionId, "",
+                                                    table.getName(), "", partitionName, newPartitionName);
         Env.getCurrentEnv().getEditLog().logRecoverPartition(recoverInfo);
         LOG.info("recover partition[{}]", partitionId);
     }
@@ -1281,35 +1296,83 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
     // this class is not protected by any lock, will throw ConcurrentModificationException.
     @Override
     public synchronized void write(DataOutput out) throws IOException {
-        int count = idToDatabase.size();
-        out.writeInt(count);
+        out.writeInt(idToDatabase.size());
         for (Map.Entry<Long, RecycleDatabaseInfo> entry : idToDatabase.entrySet()) {
             out.writeLong(entry.getKey());
             entry.getValue().write(out);
         }
-
-        count = idToTable.size();
-        out.writeInt(count);
+        out.writeInt(idToTable.size());
         for (Map.Entry<Long, RecycleTableInfo> entry : idToTable.entrySet()) {
             out.writeLong(entry.getKey());
             entry.getValue().write(out);
         }
-
-        count = idToPartition.size();
-        out.writeInt(count);
+        out.writeInt(idToPartition.size());
         for (Map.Entry<Long, RecyclePartitionInfo> entry : idToPartition.entrySet()) {
             out.writeLong(entry.getKey());
             entry.getValue().write(out);
         }
-
-        count = idToRecycleTime.size();
-        out.writeInt(count);
+        out.writeInt(idToRecycleTime.size());
         for (Map.Entry<Long, Long> entry : idToRecycleTime.entrySet()) {
             out.writeLong(entry.getKey());
             out.writeLong(entry.getValue());
         }
+        Text.writeString(out, GsonUtils.GSON.toJson(this));
     }
 
+    public void readFieldsWithGson(DataInput in) throws IOException {
+        int count = in.readInt();
+        for (int i = 0; i < count; i++) {
+            long id = in.readLong();
+            RecycleDatabaseInfo dbInfo = new RecycleDatabaseInfo();
+            dbInfo.readFields(in);
+            idToDatabase.put(id, dbInfo);
+        }
+
+        count = in.readInt();
+        for (int i = 0; i < count; i++) {
+            long id = in.readLong();
+            RecycleTableInfo tableInfo = new RecycleTableInfo();
+            tableInfo = tableInfo.read(in);
+            idToTable.put(id, tableInfo);
+        }
+
+        count = in.readInt();
+        for (int i = 0; i < count; i++) {
+            long id = in.readLong();
+            RecyclePartitionInfo partitionInfo = new RecyclePartitionInfo();
+            partitionInfo = partitionInfo.read(in);
+            idToPartition.put(id, partitionInfo);
+        }
+
+        count = in.readInt();
+        for (int i = 0; i < count; i++) {
+            long id = in.readLong();
+            long time = in.readLong();
+            idToRecycleTime.put(id, time);
+        }
+        GsonUtils.GSON.fromJson(Text.readString(in), CatalogRecycleBin.class);
+    }
+
+    public static CatalogRecycleBin read(DataInput in) throws IOException {
+        if (Env.getCurrentEnvJournalVersion() < FeMetaVersion.VERSION_136) {
+            CatalogRecycleBin bin = new CatalogRecycleBin();
+            bin.readFields(in);
+            return bin;
+        } else if (Env.getCurrentEnvJournalVersion() < FeMetaVersion.VERSION_139) {
+            return GsonUtils.GSON.fromJson(Text.readString(in), CatalogRecycleBin.class);
+        } else {
+            CatalogRecycleBin bin = new CatalogRecycleBin();
+            bin.readFieldsWithGson(in);
+            return bin;
+        }
+    }
+
+    @Override
+    public void gsonPostProcess() throws IOException {
+        updateDbInfoForLowerVersion();
+    }
+
+    @Deprecated
     public void readFields(DataInput in) throws IOException {
         int count = in.readInt();
         for (int i = 0; i < count; i++) {
@@ -1368,10 +1431,13 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
         }
     }
 
-    public class RecycleDatabaseInfo implements Writable {
+    public class RecycleDatabaseInfo {
         private Database db;
         private Set<String> tableNames;
         private Set<Long> tableIds;
+        // for compatibility in the future
+        @SerializedName("u")
+        private String unused;
 
         public RecycleDatabaseInfo() {
             tableNames = Sets.newHashSet();
@@ -1400,21 +1466,17 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
             return this.tableIds = tableIds;
         }
 
-        @Override
         public void write(DataOutput out) throws IOException {
             db.write(out);
-
-            int count = tableNames.size();
-            out.writeInt(count);
+            out.writeInt(tableNames.size());
             for (String tableName : tableNames) {
                 Text.writeString(out, tableName);
             }
-
-            count = tableIds.size();
-            out.writeInt(count);
-            for (long tableId : tableIds) {
+            out.writeInt(tableIds.size());
+            for (Long tableId : tableIds) {
                 out.writeLong(tableId);
             }
+            Text.writeString(out, GsonUtils.GSON.toJson(this));
         }
 
         public void readFields(DataInput in) throws IOException {
@@ -1432,11 +1494,16 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
                     tableIds.add(tableId);
                 }
             }
+            if (Env.getCurrentEnvJournalVersion() >= FeMetaVersion.VERSION_139) {
+                GsonUtils.GSON.fromJson(Text.readString(in), RecycleDatabaseInfo.class);
+            }
         }
     }
 
-    public class RecycleTableInfo implements Writable {
+    public class RecycleTableInfo {
+        @SerializedName("did")
         private long dbId;
+        @SerializedName("t")
         private Table table;
 
         public RecycleTableInfo() {
@@ -1456,27 +1523,39 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
             return table;
         }
 
-        @Override
         public void write(DataOutput out) throws IOException {
-            out.writeLong(dbId);
-            table.write(out);
+            Text.writeString(out, GsonUtils.GSON.toJson(this));
         }
 
+        public RecycleTableInfo read(DataInput in) throws IOException {
+            return GsonUtils.GSON.fromJson(Text.readString(in), RecycleTableInfo.class);
+        }
+
+        @Deprecated
         public void readFields(DataInput in) throws IOException {
             dbId = in.readLong();
             table = Table.read(in);
         }
     }
 
-    public class RecyclePartitionInfo implements Writable {
+    public class RecyclePartitionInfo {
+        @SerializedName("did")
         private long dbId;
+        @SerializedName("tid")
         private long tableId;
+        @SerializedName("p")
         private Partition partition;
+        @SerializedName("r")
         private Range<PartitionKey> range;
+        @SerializedName("lpi")
         private PartitionItem listPartitionItem;
+        @SerializedName("dp")
         private DataProperty dataProperty;
+        @SerializedName("ra")
         private ReplicaAllocation replicaAlloc;
+        @SerializedName("im")
         private boolean isInMemory;
+        @SerializedName("mu")
         private boolean isMutable = true;
 
         public RecyclePartitionInfo() {
@@ -1534,25 +1613,12 @@ public class CatalogRecycleBin extends MasterDaemon implements Writable {
             return isMutable;
         }
 
-        @Override
         public void write(DataOutput out) throws IOException {
-            out.writeLong(dbId);
-            out.writeLong(tableId);
-            partition.write(out);
-            RangeUtils.writeRange(out, range);
-            listPartitionItem.write(out);
-            dataProperty.write(out);
-            replicaAlloc.write(out);
-            out.writeBoolean(isInMemory);
-            if (Config.isCloudMode()) {
-                // HACK: the origin implementation of the cloud mode has code likes:
-                //
-                //     out.writeBoolean(isPersistent);
-                //
-                // keep the compatibility here.
-                out.writeBoolean(false);
-            }
-            out.writeBoolean(isMutable);
+            Text.writeString(out, GsonUtils.GSON.toJson(this));
+        }
+
+        public RecyclePartitionInfo read(DataInput in) throws IOException {
+            return GsonUtils.GSON.fromJson(Text.readString(in), RecyclePartitionInfo.class);
         }
 
         public void readFields(DataInput in) throws IOException {

@@ -20,9 +20,11 @@ package org.apache.doris.nereids.trees.plans.commands.info;
 import org.apache.doris.analysis.AlterClause;
 import org.apache.doris.analysis.CreateTableStmt;
 import org.apache.doris.analysis.DistributionDesc;
+import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.IndexDef;
 import org.apache.doris.analysis.KeysDesc;
 import org.apache.doris.analysis.PartitionDesc;
+import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.analysis.TableName;
 import org.apache.doris.catalog.AggregateType;
 import org.apache.doris.catalog.Column;
@@ -37,6 +39,7 @@ import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.FeNameFormat;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.util.AutoBucketUtils;
+import org.apache.doris.common.util.GeneratedColumnUtil;
 import org.apache.doris.common.util.InternalDatabaseUtil;
 import org.apache.doris.common.util.ParseUtil;
 import org.apache.doris.common.util.PropertyAnalyzer;
@@ -46,23 +49,51 @@ import org.apache.doris.datasource.es.EsUtil;
 import org.apache.doris.datasource.hive.HMSExternalCatalog;
 import org.apache.doris.datasource.iceberg.IcebergExternalCatalog;
 import org.apache.doris.mysql.privilege.PrivPredicate;
+import org.apache.doris.nereids.CascadesContext;
+import org.apache.doris.nereids.analyzer.Scope;
+import org.apache.doris.nereids.analyzer.UnboundSlot;
 import org.apache.doris.nereids.exceptions.AnalysisException;
-import org.apache.doris.nereids.parser.PartitionTableInfo;
+import org.apache.doris.nereids.glue.translator.ExpressionTranslator;
+import org.apache.doris.nereids.glue.translator.PlanTranslatorContext;
+import org.apache.doris.nereids.properties.PhysicalProperties;
+import org.apache.doris.nereids.rules.analysis.ExpressionAnalyzer;
+import org.apache.doris.nereids.rules.expression.ExpressionRewriteContext;
+import org.apache.doris.nereids.trees.expressions.Expression;
+import org.apache.doris.nereids.trees.expressions.Slot;
+import org.apache.doris.nereids.trees.expressions.SlotReference;
+import org.apache.doris.nereids.trees.expressions.SubqueryExpr;
+import org.apache.doris.nereids.trees.expressions.Variable;
+import org.apache.doris.nereids.trees.expressions.functions.BoundFunction;
+import org.apache.doris.nereids.trees.expressions.functions.Udf;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.GroupingScalarFunction;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.Lambda;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.ScalarFunction;
+import org.apache.doris.nereids.trees.expressions.visitor.DefaultExpressionRewriter;
+import org.apache.doris.nereids.trees.plans.logical.LogicalEmptyRelation;
 import org.apache.doris.nereids.types.DataType;
+import org.apache.doris.nereids.util.TypeCoercionUtils;
 import org.apache.doris.nereids.util.Utils;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.thrift.TInvertedIndexFileStorageFormat;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -72,7 +103,6 @@ import java.util.stream.Collectors;
  * table info in creating table.
  */
 public class CreateTableInfo {
-
     public static final String ENGINE_OLAP = "olap";
     public static final String ENGINE_JDBC = "jdbc";
     public static final String ENGINE_ELASTICSEARCH = "elasticsearch";
@@ -81,6 +111,10 @@ public class CreateTableInfo {
     public static final String ENGINE_BROKER = "broker";
     public static final String ENGINE_HIVE = "hive";
     public static final String ENGINE_ICEBERG = "iceberg";
+    private static final ImmutableSet<AggregateType> GENERATED_COLUMN_ALLOW_AGG_TYPE =
+            ImmutableSet.of(AggregateType.REPLACE, AggregateType.REPLACE_IF_NOT_NULL);
+
+    private static final Logger LOG = LogManager.getLogger(CreateTableInfo.class);
 
     private final boolean ifNotExists;
     private String ctlName;
@@ -98,11 +132,11 @@ public class CreateTableInfo {
     private Map<String, String> properties;
     private Map<String, String> extProperties;
     private boolean isEnableMergeOnWrite = false;
+    private boolean isEnableSkipBitmapColumn = false;
 
     private boolean isExternal = false;
     private String clusterName = null;
     private List<String> clusterKeysColumnNames = null;
-    private List<Integer> clusterKeysColumnIds = null;
     private PartitionTableInfo partitionTableInfo; // get when validate
 
     /**
@@ -196,6 +230,21 @@ public class CreateTableInfo {
         return ImmutableList.of(tableName);
     }
 
+    private void checkEngineWithCatalog() {
+        if (engineName.equals(ENGINE_OLAP)) {
+            if (!ctlName.equals(InternalCatalog.INTERNAL_CATALOG_NAME)) {
+                throw new AnalysisException("Cannot create olap table out of internal catalog."
+                    + " Make sure 'engine' type is specified when use the catalog: " + ctlName);
+            }
+        }
+        CatalogIf catalog = Env.getCurrentEnv().getCatalogMgr().getCatalog(ctlName);
+        if (catalog instanceof HMSExternalCatalog && !engineName.equals(ENGINE_HIVE)) {
+            throw new AnalysisException("Hms type catalog can only use `hive` engine.");
+        } else if (catalog instanceof IcebergExternalCatalog && !engineName.equals(ENGINE_ICEBERG)) {
+            throw new AnalysisException("Iceberg type catalog can only use `iceberg` engine.");
+        }
+    }
+
     /**
      * analyze create table info
      */
@@ -233,12 +282,7 @@ public class CreateTableInfo {
             throw new AnalysisException(e.getMessage(), e);
         }
 
-        if (engineName.equals(ENGINE_OLAP)) {
-            if (!ctlName.equals(InternalCatalog.INTERNAL_CATALOG_NAME)) {
-                throw new AnalysisException("Cannot create olap table out of internal catalog."
-                    + " Make sure 'engine' type is specified when use the catalog: " + ctlName);
-            }
-        }
+        checkEngineWithCatalog();
 
         // analyze table name
         if (Strings.isNullOrEmpty(dbName)) {
@@ -264,6 +308,16 @@ public class CreateTableInfo {
 
         //check datev1 and decimalv2
         for (ColumnDefinition columnDef : columns) {
+            String columnNameUpperCase = columnDef.getName().toUpperCase();
+            if (columnNameUpperCase.startsWith("__DORIS_")) {
+                throw new AnalysisException(
+                        "Disable to create table column with name start with __DORIS_: " + columnNameUpperCase);
+            }
+            if (columnDef.getType().isVariantType() && columnNameUpperCase.indexOf('.') != -1) {
+                throw new AnalysisException(
+                        "Disable to create table of `VARIANT` type column named with a `.` character: "
+                                + columnNameUpperCase);
+            }
             if (columnDef.getType().isDateType() && Config.disable_datev1) {
                 throw new AnalysisException(
                         "Disable to create table with `DATE` type columns, please use `DATEV2`.");
@@ -378,11 +432,42 @@ public class CreateTableInfo {
                 }
             }
 
+            try {
+                if (Config.random_add_cluster_keys_for_mow && isEnableMergeOnWrite && clusterKeysColumnNames.isEmpty()
+                        && PropertyAnalyzer.analyzeUseLightSchemaChange(new HashMap<>(properties))) {
+                    // exclude columns whose data type can not be cluster key, see {@link ColumnDefinition#validate}
+                    List<ColumnDefinition> clusterKeysCandidates = columns.stream().filter(c -> {
+                        DataType type = c.getType();
+                        return !(type.isFloatLikeType() || type.isStringType() || type.isArrayType()
+                                || type.isBitmapType() || type.isHllType() || type.isQuantileStateType()
+                                || type.isJsonType()
+                                || type.isVariantType()
+                                || type.isMapType()
+                                || type.isStructType());
+                    }).collect(Collectors.toList());
+                    if (clusterKeysCandidates.size() > 0) {
+                        clusterKeysColumnNames = new ArrayList<>();
+                        Random random = new Random();
+                        int randomClusterKeysCount = random.nextInt(clusterKeysCandidates.size()) + 1;
+                        Collections.shuffle(clusterKeysCandidates);
+                        for (int i = 0; i < randomClusterKeysCount; i++) {
+                            clusterKeysColumnNames.add(clusterKeysCandidates.get(i).getName());
+                        }
+                        LOG.info("Randomly add cluster keys for table {}.{}: {}",
+                                dbName, tableName, clusterKeysColumnNames);
+                    }
+                }
+            } catch (Exception e) {
+                throw new AnalysisException(e.getMessage(), e.getCause());
+            }
+
             validateKeyColumns();
-            if (!clusterKeysColumnNames.isEmpty() && !isEnableMergeOnWrite) {
-                throw new AnalysisException(
-                        "Cluster keys only support unique keys table which enabled "
-                                + PropertyAnalyzer.ENABLE_UNIQUE_KEY_MERGE_ON_WRITE);
+            if (!clusterKeysColumnNames.isEmpty()) {
+                if (!isEnableMergeOnWrite) {
+                    throw new AnalysisException(
+                            "Cluster keys only support unique keys table which enabled "
+                                    + PropertyAnalyzer.ENABLE_UNIQUE_KEY_MERGE_ON_WRITE);
+                }
             }
             for (int i = 0; i < keys.size(); ++i) {
                 columns.get(i).setIsKey(true);
@@ -452,6 +537,35 @@ public class CreateTableInfo {
                 }
             }
 
+            if (properties != null) {
+                if (properties.containsKey(PropertyAnalyzer.ENABLE_UNIQUE_KEY_SKIP_BITMAP_COLUMN)
+                        && !(keysType.equals(KeysType.UNIQUE_KEYS) && isEnableMergeOnWrite)) {
+                    throw new AnalysisException("tablet property enable_unique_key_skip_bitmap_column can"
+                            + "only be set in merge-on-write unique table.");
+                }
+                // the merge-on-write table must have enable_unique_key_skip_bitmap_column table property
+                // and its value should be consistent with whether the table's full schema contains
+                // the skip bitmap hidden column
+                if (keysType.equals(KeysType.UNIQUE_KEYS) && isEnableMergeOnWrite) {
+                    properties = PropertyAnalyzer.addEnableUniqueKeySkipBitmapPropertyIfNotExists(properties);
+                    // `analyzeXXX` would modify `properties`, which will be used later,
+                    // so we just clone a properties map here.
+                    try {
+                        isEnableSkipBitmapColumn = PropertyAnalyzer.analyzeUniqueKeySkipBitmapColumn(
+                                new HashMap<>(properties));
+                    } catch (Exception e) {
+                        throw new AnalysisException(e.getMessage(), e.getCause());
+                    }
+                }
+            }
+
+            if (isEnableSkipBitmapColumn && keysType.equals(KeysType.UNIQUE_KEYS)) {
+                if (isEnableMergeOnWrite) {
+                    columns.add(ColumnDefinition.newSkipBitmapColumnDef(AggregateType.NONE));
+                }
+                // TODO(bobhan1): add support for mor table
+            }
+
             // validate partition
             partitionTableInfo.extractPartitionColumns();
             partitionTableInfo.validatePartitionInfo(
@@ -504,7 +618,6 @@ public class CreateTableInfo {
                     throw new AnalysisException(engineName + " catalog doesn't support column with 'NOT NULL'.");
                 }
                 columnDef.setIsKey(true);
-                columnDef.setAggType(AggregateType.NONE);
             }
             // TODO: support iceberg partition check
             if (engineName.equalsIgnoreCase(ENGINE_HIVE)) {
@@ -512,7 +625,6 @@ public class CreateTableInfo {
                         engineName, columns, columnMap, properties, ctx, false, true);
             }
         }
-
         // validate column
         try {
             if (!engineName.equals(ENGINE_ELASTICSEARCH) && columns.isEmpty()) {
@@ -525,13 +637,25 @@ public class CreateTableInfo {
         final boolean finalEnableMergeOnWrite = isEnableMergeOnWrite;
         Set<String> keysSet = Sets.newTreeSet(String.CASE_INSENSITIVE_ORDER);
         keysSet.addAll(keys);
-        columns.forEach(c -> c.validate(engineName.equals(ENGINE_OLAP), keysSet, finalEnableMergeOnWrite,
+        Set<String> clusterKeySet = Sets.newTreeSet(String.CASE_INSENSITIVE_ORDER);
+        clusterKeySet.addAll(clusterKeysColumnNames);
+        columns.forEach(c -> c.validate(engineName.equals(ENGINE_OLAP), keysSet, clusterKeySet, finalEnableMergeOnWrite,
                 keysType));
 
         // validate index
         if (!indexes.isEmpty()) {
             Set<String> distinct = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
             Set<Pair<IndexDef.IndexType, List<String>>> distinctCol = new HashSet<>();
+            boolean disableInvertedIndexV1ForVariant = false;
+            TInvertedIndexFileStorageFormat invertedIndexFileStorageFormat;
+            try {
+                invertedIndexFileStorageFormat = PropertyAnalyzer.analyzeInvertedIndexFileStorageFormat(
+                        new HashMap<>(properties));
+                disableInvertedIndexV1ForVariant = invertedIndexFileStorageFormat == TInvertedIndexFileStorageFormat.V1
+                        && ConnectContext.get().getSessionVariable().getDisableInvertedIndexV1ForVaraint();
+            } catch (Exception e) {
+                throw new AnalysisException(e.getMessage(), e.getCause());
+            }
 
             for (IndexDefinition indexDef : indexes) {
                 indexDef.validate();
@@ -543,7 +667,8 @@ public class CreateTableInfo {
                     boolean found = false;
                     for (ColumnDefinition column : columns) {
                         if (column.getName().equalsIgnoreCase(indexColName)) {
-                            indexDef.checkColumn(column, keysType, isEnableMergeOnWrite);
+                            indexDef.checkColumn(column, keysType, isEnableMergeOnWrite,
+                                    invertedIndexFileStorageFormat, disableInvertedIndexV1ForVariant);
                             found = true;
                             break;
                         }
@@ -565,6 +690,7 @@ public class CreateTableInfo {
                         "same index columns have multiple same type index is not allowed.");
             }
         }
+        generatedColumnCheck(ctx);
     }
 
     private void paddingEngineName(String ctlName, ConnectContext ctx) {
@@ -660,7 +786,7 @@ public class CreateTableInfo {
             if (!newProperties.containsKey(PropertyAnalyzer.PROPERTIES_ESTIMATE_PARTITION_SIZE)) {
                 distributionDesc.updateBucketNum(FeConstants.default_bucket_num);
             } else {
-                long partitionSize = ParseUtil.analyzeDataVolumn(
+                long partitionSize = ParseUtil.analyzeDataVolume(
                         newProperties.get(PropertyAnalyzer.PROPERTIES_ESTIMATE_PARTITION_SIZE));
                 distributionDesc.updateBucketNum(AutoBucketUtils.getBucketsNum(partitionSize,
                         Config.autobucket_min_buckets));
@@ -683,47 +809,6 @@ public class CreateTableInfo {
         if (keys.size() > columns.size()) {
             throw new AnalysisException(
                     "The number of key columns should be less than the number of columns.");
-        }
-
-        if (!clusterKeysColumnNames.isEmpty()) {
-            if (keysType != KeysType.UNIQUE_KEYS) {
-                throw new AnalysisException("Cluster keys only support unique keys table.");
-            }
-            clusterKeysColumnIds = Lists.newArrayList();
-            for (int i = 0; i < clusterKeysColumnNames.size(); ++i) {
-                String name = clusterKeysColumnNames.get(i);
-                // check if key is duplicate
-                for (int j = 0; j < i; j++) {
-                    if (clusterKeysColumnNames.get(j).equalsIgnoreCase(name)) {
-                        throw new AnalysisException("Duplicate cluster key column[" + name + "].");
-                    }
-                }
-                // check if key exists and generate key column ids
-                for (int j = 0; j < columns.size(); j++) {
-                    if (columns.get(j).getName().equalsIgnoreCase(name)) {
-                        columns.get(j).setClusterKeyId(clusterKeysColumnIds.size());
-                        clusterKeysColumnIds.add(j);
-                        break;
-                    }
-                    if (j == columns.size() - 1) {
-                        throw new AnalysisException(
-                                "Key cluster column[" + name + "] doesn't exist.");
-                    }
-                }
-            }
-
-            int minKeySize = keys.size() < clusterKeysColumnNames.size() ? keys.size()
-                    : clusterKeysColumnNames.size();
-            boolean sameKey = true;
-            for (int i = 0; i < minKeySize; ++i) {
-                if (!keys.get(i).equalsIgnoreCase(clusterKeysColumnNames.get(i))) {
-                    sameKey = false;
-                    break;
-                }
-            }
-            if (sameKey) {
-                throw new AnalysisException("Unique keys and cluster keys should be different.");
-            }
         }
 
         for (int i = 0; i < keys.size(); ++i) {
@@ -758,6 +843,47 @@ public class CreateTableInfo {
                     throw new AnalysisException(
                             keysType.name() + " table should not specify aggregate type for "
                                     + "non-key column[" + columns.get(i).getName() + "]");
+                }
+            }
+        }
+
+        if (!clusterKeysColumnNames.isEmpty()) {
+            // the same code as KeysDesc#analyzeClusterKeys
+            if (keysType != KeysType.UNIQUE_KEYS) {
+                throw new AnalysisException("Cluster keys only support unique keys table");
+            }
+            // check that cluster keys is not duplicated
+            for (int i = 0; i < clusterKeysColumnNames.size(); i++) {
+                String name = clusterKeysColumnNames.get(i);
+                for (int j = 0; j < i; j++) {
+                    if (clusterKeysColumnNames.get(j).equalsIgnoreCase(name)) {
+                        throw new AnalysisException("Duplicate cluster key column[" + name + "].");
+                    }
+                }
+            }
+            // check that cluster keys is not equal to primary keys
+            int minKeySize = Math.min(keys.size(), clusterKeysColumnNames.size());
+            boolean sameKey = true;
+            for (int i = 0; i < minKeySize; ++i) {
+                if (!keys.get(i).equalsIgnoreCase(clusterKeysColumnNames.get(i))) {
+                    sameKey = false;
+                    break;
+                }
+            }
+            if (sameKey && !Config.random_add_cluster_keys_for_mow) {
+                throw new AnalysisException("Unique keys and cluster keys should be different.");
+            }
+            // check that cluster key column exists
+            for (int i = 0; i < clusterKeysColumnNames.size(); ++i) {
+                String name = clusterKeysColumnNames.get(i);
+                for (int j = 0; j < columns.size(); j++) {
+                    if (columns.get(j).getName().equalsIgnoreCase(name)) {
+                        columns.get(j).setClusterKeyId(i);
+                        break;
+                    }
+                    if (j == columns.size() - 1) {
+                        throw new AnalysisException("Cluster key column[" + name + "] doesn't exist.");
+                    }
                 }
             }
         }
@@ -804,13 +930,224 @@ public class CreateTableInfo {
         return new CreateTableStmt(ifNotExists, isExternal,
                 new TableName(ctlName, dbName, tableName),
                 catalogColumns, catalogIndexes, engineName,
-                new KeysDesc(keysType, keys, clusterKeysColumnNames, clusterKeysColumnIds),
+                new KeysDesc(keysType, keys, clusterKeysColumnNames),
                 partitionDesc, distributionDesc, Maps.newHashMap(properties), extProperties,
                 comment, addRollups, null);
     }
 
     public void setIsExternal(boolean isExternal) {
         this.isExternal = isExternal;
+    }
+
+    private void generatedColumnCommonCheck() {
+        for (ColumnDefinition column : columns) {
+            if (keysType == KeysType.AGG_KEYS && column.getGeneratedColumnDesc().isPresent()
+                    && (!column.isKey() && !GENERATED_COLUMN_ALLOW_AGG_TYPE.contains(column.getAggType()))) {
+                throw new AnalysisException("The generated columns can be key columns, "
+                        + "or value columns of replace and replace_if_not_null aggregation type.");
+            }
+            if (column.getGeneratedColumnDesc().isPresent() && !engineName.equalsIgnoreCase("olap")) {
+                throw new AnalysisException("Tables can only have generated columns if the olap engine is used");
+            }
+        }
+    }
+
+    private void generatedColumnCheck(ConnectContext ctx) {
+        generatedColumnCommonCheck();
+        LogicalEmptyRelation plan = new LogicalEmptyRelation(
+                ConnectContext.get().getStatementContext().getNextRelationId(),
+                new ArrayList<>());
+        CascadesContext cascadesContext = CascadesContext.initContext(ctx.getStatementContext(), plan,
+                PhysicalProperties.ANY);
+        Map<String, Slot> columnToSlotReference = Maps.newHashMap();
+        Map<String, ColumnDefinition> nameToColumnDefinition = Maps.newHashMap();
+        Map<Slot, SlotRefAndIdx> translateMap = Maps.newHashMap();
+        for (int i = 0; i < columns.size(); i++) {
+            ColumnDefinition column = columns.get(i);
+            Slot slot = new SlotReference(column.getName(), column.getType());
+            columnToSlotReference.put(column.getName(), slot);
+            nameToColumnDefinition.put(column.getName(), column);
+            SlotRef slotRef = new SlotRef(null, column.getName());
+            slotRef.setType(column.getType().toCatalogDataType());
+            translateMap.put(slot, new SlotRefAndIdx(slotRef, i, column.getGeneratedColumnDesc().isPresent()));
+        }
+        PlanTranslatorContext planTranslatorContext = new PlanTranslatorContext(cascadesContext);
+        List<Slot> slots = Lists.newArrayList(columnToSlotReference.values());
+        List<GeneratedColumnUtil.ExprAndname> exprAndnames = Lists.newArrayList();
+        for (int i = 0; i < columns.size(); i++) {
+            ColumnDefinition column = columns.get(i);
+            Optional<GeneratedColumnDesc> info = column.getGeneratedColumnDesc();
+            if (!info.isPresent()) {
+                continue;
+            }
+            Expression parsedExpression = info.get().getExpression();
+            checkParsedExpressionInGeneratedColumn(parsedExpression);
+            Expression boundSlotExpression = SlotReplacer.INSTANCE.replace(parsedExpression, columnToSlotReference);
+            Scope scope = new Scope(slots);
+            ExpressionAnalyzer analyzer = new ExpressionAnalyzer(null, scope, cascadesContext, false, false);
+            Expression expr;
+            try {
+                expr = analyzer.analyze(boundSlotExpression, new ExpressionRewriteContext(cascadesContext));
+            } catch (AnalysisException e) {
+                throw new AnalysisException("In generated column '" + column.getName() + "', "
+                        + Utils.convertFirstChar(e.getMessage()));
+            }
+            checkExpressionInGeneratedColumn(expr, column, nameToColumnDefinition);
+            TypeCoercionUtils.checkCanCastTo(expr.getDataType(), column.getType());
+            ExpressionToExpr translator = new ExpressionToExpr(i, translateMap);
+            Expr e = expr.accept(translator, planTranslatorContext);
+            info.get().setExpr(e);
+            exprAndnames.add(new GeneratedColumnUtil.ExprAndname(e.clone(), column.getName()));
+        }
+
+        // for alter drop column
+        Map<String, List<String>> columnToListOfGeneratedColumnsThatReferToThis = new HashMap<>();
+        for (ColumnDefinition column : columns) {
+            Optional<GeneratedColumnDesc> info = column.getGeneratedColumnDesc();
+            if (!info.isPresent()) {
+                continue;
+            }
+            Expr generatedExpr = info.get().getExpr();
+            Set<Expr> slotRefsInGeneratedExpr = new HashSet<>();
+            generatedExpr.collect(e -> e instanceof SlotRef, slotRefsInGeneratedExpr);
+            for (Expr slotRefExpr : slotRefsInGeneratedExpr) {
+                String name = ((SlotRef) slotRefExpr).getColumnName();
+                columnToListOfGeneratedColumnsThatReferToThis
+                        .computeIfAbsent(name, k -> new ArrayList<>())
+                        .add(column.getName());
+            }
+        }
+        for (Map.Entry<String, List<String>> entry : columnToListOfGeneratedColumnsThatReferToThis.entrySet()) {
+            ColumnDefinition col = nameToColumnDefinition.get(entry.getKey());
+            col.addGeneratedColumnsThatReferToThis(entry.getValue());
+        }
+
+        // expand expr
+        GeneratedColumnUtil.rewriteColumns(exprAndnames);
+        for (GeneratedColumnUtil.ExprAndname exprAndname : exprAndnames) {
+            if (nameToColumnDefinition.containsKey(exprAndname.getName())) {
+                ColumnDefinition columnDefinition = nameToColumnDefinition.get(exprAndname.getName());
+                Optional<GeneratedColumnDesc> info = columnDefinition.getGeneratedColumnDesc();
+                info.ifPresent(genCol -> genCol.setExpandExprForLoad(exprAndname.getExpr()));
+            }
+        }
+    }
+
+    private static class SlotReplacer extends DefaultExpressionRewriter<Map<String, Slot>> {
+        public static final SlotReplacer INSTANCE = new SlotReplacer();
+
+        public Expression replace(Expression e, Map<String, Slot> replaceMap) {
+            return e.accept(this, replaceMap);
+        }
+
+        @Override
+        public Expression visitUnboundSlot(UnboundSlot unboundSlot, Map<String, Slot> replaceMap) {
+            if (!replaceMap.containsKey(unboundSlot.getName())) {
+                throw new AnalysisException("Unknown column '" + unboundSlot.getName()
+                        + "' in 'generated column function'");
+            }
+            return replaceMap.get(unboundSlot.getName());
+        }
+    }
+
+    void checkParsedExpressionInGeneratedColumn(Expression expr) {
+        expr.foreach(e -> {
+            if (e instanceof SubqueryExpr) {
+                throw new AnalysisException("Generated column does not support subquery.");
+            } else if (e instanceof Lambda) {
+                throw new AnalysisException("Generated column does not support lambda.");
+            }
+        });
+    }
+
+    void checkExpressionInGeneratedColumn(Expression expr, ColumnDefinition column,
+            Map<String, ColumnDefinition> nameToColumnDefinition) {
+        expr.foreach(e -> {
+            if (e instanceof Variable) {
+                throw new AnalysisException("Generated column expression cannot contain variable.");
+            } else if (e instanceof Slot && nameToColumnDefinition.containsKey(((Slot) e).getName())) {
+                ColumnDefinition columnDefinition = nameToColumnDefinition.get(((Slot) e).getName());
+                if (columnDefinition.getAutoIncInitValue() != -1) {
+                    throw new AnalysisException(
+                            "Generated column '" + column.getName()
+                                    + "' cannot refer to auto-increment column.");
+                }
+            } else if (e instanceof BoundFunction && !checkFunctionInGeneratedColumn((BoundFunction) e)) {
+                throw new AnalysisException("Expression of generated column '"
+                        + column.getName() + "' contains a disallowed function:'"
+                        + ((BoundFunction) e).getName() + "'");
+            }
+        });
+    }
+
+    boolean checkFunctionInGeneratedColumn(Expression expr) {
+        if (!(expr instanceof ScalarFunction)) {
+            return false;
+        }
+        if (expr instanceof Udf) {
+            return false;
+        }
+        if (expr instanceof GroupingScalarFunction) {
+            return false;
+        }
+        return true;
+    }
+
+    private static class ExpressionToExpr extends ExpressionTranslator {
+        private final Map<Slot, SlotRefAndIdx> slotRefMap;
+        private final int index;
+
+        public ExpressionToExpr(int index, Map<Slot, SlotRefAndIdx> slotRefMap) {
+            this.index = index;
+            this.slotRefMap = slotRefMap;
+        }
+
+        @Override
+        public Expr visitSlotReference(SlotReference slotReference, PlanTranslatorContext context) {
+            if (!slotRefMap.containsKey(slotReference)) {
+                throw new AnalysisException("Unknown column '" + slotReference.getName() + "'");
+            }
+            int idx = slotRefMap.get(slotReference).getIdx();
+            boolean isGenCol = slotRefMap.get(slotReference).isGeneratedColumn();
+            if (isGenCol && idx >= index) {
+                throw new AnalysisException(
+                        "Generated column can refer only to generated columns defined prior to it.");
+            }
+            return slotRefMap.get(slotReference).getSlotRef();
+        }
+    }
+
+    /** SlotRefAndIdx */
+    public static class SlotRefAndIdx {
+        private final SlotRef slotRef;
+        private final int idx;
+        private final boolean isGeneratedColumn;
+
+        public SlotRefAndIdx(SlotRef slotRef, int idx, boolean isGeneratedColumn) {
+            this.slotRef = slotRef;
+            this.idx = idx;
+            this.isGeneratedColumn = isGeneratedColumn;
+        }
+
+        public int getIdx() {
+            return idx;
+        }
+
+        public SlotRef getSlotRef() {
+            return slotRef;
+        }
+
+        public boolean isGeneratedColumn() {
+            return isGeneratedColumn;
+        }
+    }
+
+    public PartitionTableInfo getPartitionTableInfo() {
+        return partitionTableInfo;
+    }
+
+    public DistributionDescriptor getDistribution() {
+        return distribution;
     }
 }
 

@@ -21,6 +21,9 @@
 #include <glog/logging.h>
 #include <string.h>
 
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
@@ -42,7 +45,6 @@
 // leave these 2 size small for debugging
 
 namespace doris {
-
 const uint8_t* EncloseCsvLineReaderContext::read_line_impl(const uint8_t* start,
                                                            const size_t length) {
     _total_len = length;
@@ -82,12 +84,11 @@ void EncloseCsvLineReaderContext::on_col_sep_found(const uint8_t* start,
 }
 
 size_t EncloseCsvLineReaderContext::update_reading_bound(const uint8_t* start) {
-    _result = (uint8_t*)memmem(start + _idx, _total_len - _idx, line_delimiter.c_str(),
-                               line_delimiter_len);
+    _result = call_find_line_sep(start + _idx, _total_len - _idx);
     if (_result == nullptr) {
         return _total_len;
     }
-    return _result - start + line_delimiter_len;
+    return _result - start + line_delimiter_length();
 }
 
 template <bool SingleChar>
@@ -160,6 +161,11 @@ void EncloseCsvLineReaderContext::_on_pre_match_enclose(const uint8_t* start, si
         if (_idx != _total_len) {
             len = update_reading_bound(start);
         } else {
+            // It needs to set the result to nullptr for matching enclose may not be read
+            // after reading the output buf.
+            // Therefore, if the result is not set to nullptr,
+            // the parser will consider reading a line as there is a line delimiter.
+            _result = nullptr;
             break;
         }
     } while (true);
@@ -167,8 +173,9 @@ void EncloseCsvLineReaderContext::_on_pre_match_enclose(const uint8_t* start, si
 
 void EncloseCsvLineReaderContext::_on_match_enclose(const uint8_t* start, size_t& len) {
     const uint8_t* curr_start = start + _idx;
+    size_t curr_len = len - _idx;
     const uint8_t* delim_pos =
-            find_col_sep_func(curr_start, _column_sep_len, _column_sep.c_str(), _column_sep_len);
+            find_col_sep_func(curr_start, curr_len, _column_sep.c_str(), _column_sep_len);
 
     if (delim_pos != nullptr) [[likely]] {
         on_col_sep_found(start, delim_pos);

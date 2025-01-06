@@ -61,6 +61,7 @@ import org.apache.doris.nereids.glue.LogicalPlanAdapter;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
 import org.apache.doris.nereids.trees.expressions.StatementScopeIdGenerator;
+import org.apache.doris.nereids.trees.plans.commands.ExportCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalCheckPolicy;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFileSink;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
@@ -97,7 +98,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Data
@@ -173,6 +173,8 @@ public class ExportJob implements Writable {
     private String withBom;
     @SerializedName("dataConsistency")
     private String dataConsistency;
+    @SerializedName("compressType")
+    private String compressType;
 
     private TableRef tableRef;
 
@@ -204,9 +206,7 @@ public class ExportJob implements Writable {
     // backend_address => snapshot path
     private List<Pair<TNetworkAddress, String>> snapshotPaths = Lists.newArrayList();
 
-    private List<ExportTaskExecutor> jobExecutorList;
-
-    private ConcurrentHashMap<Long, TransientTaskExecutor> taskIdToExecutor = new ConcurrentHashMap<>();
+    private List<ExportTaskExecutor> jobExecutorList = Lists.newArrayList();
 
     private Integer finishedTaskCount = 0;
     private List<List<OutfileInfo>> allOutfileInfo = Lists.newArrayList();
@@ -396,8 +396,8 @@ public class ExportJob implements Writable {
         return statementBase;
     }
 
-    public List<? extends TransientTaskExecutor> getTaskExecutors() {
-        return jobExecutorList;
+    public List<? extends TransientTaskExecutor> getCopiedTaskExecutors() {
+        return Lists.newArrayList(jobExecutorList);
     }
 
     private void generateExportJobExecutor() {
@@ -425,8 +425,8 @@ public class ExportJob implements Writable {
             list.addItem(SelectListItem.createStarItem(this.tableName));
         } else {
             for (Column column : exportTable.getBaseSchema()) {
-                String colName = column.getName().toLowerCase();
-                if (exportColumns.contains(colName)) {
+                String colName = column.getName();
+                if (exportColumns.contains(colName.toLowerCase())) {
                     SlotRef slotRef = new SlotRef(this.tableName, colName);
                     SelectListItem selectListItem = new SelectListItem(slotRef, null);
                     list.addItem(selectListItem);
@@ -619,13 +619,17 @@ public class ExportJob implements Writable {
         if (format.equals("csv") || format.equals("csv_with_names") || format.equals("csv_with_names_and_types")) {
             outfileProperties.put(OutFileClause.PROP_COLUMN_SEPARATOR, columnSeparator);
             outfileProperties.put(OutFileClause.PROP_LINE_DELIMITER, lineDelimiter);
+        } else {
+            // orc / parquet
+            // compressType == null means outfile will use default compression type
+            if (compressType != null) {
+                outfileProperties.put(ExportCommand.COMPRESS_TYPE, compressType);
+            }
         }
         if (!maxFileSize.isEmpty()) {
             outfileProperties.put(OutFileClause.PROP_MAX_FILE_SIZE, maxFileSize);
         }
-        if (!deleteExistingFiles.isEmpty()) {
-            outfileProperties.put(OutFileClause.PROP_DELETE_EXISTING_FILES, deleteExistingFiles);
-        }
+
         outfileProperties.put(OutFileClause.PROP_WITH_BOM, withBom);
 
         // broker properties
@@ -683,11 +687,11 @@ public class ExportJob implements Writable {
         }
 
         // we need cancel all task
-        taskIdToExecutor.keySet().forEach(id -> {
+        jobExecutorList.forEach(executor -> {
             try {
-                Env.getCurrentEnv().getTransientTaskManager().cancelMemoryTask(id);
+                Env.getCurrentEnv().getTransientTaskManager().cancelMemoryTask(executor.getId());
             } catch (JobException e) {
-                LOG.warn("cancel export task {} exception: {}", id, e);
+                LOG.warn("cancel export task {} exception: {}", executor.getId(), e);
             }
         });
 
@@ -698,10 +702,15 @@ public class ExportJob implements Writable {
         setExportJobState(ExportJobState.CANCELLED);
         finishTimeMs = System.currentTimeMillis();
         failMsg = new ExportFailMsg(type, msg);
+        jobExecutorList.clear();
+        selectStmtListPerParallel.clear();
+        allOutfileInfo.clear();
+        partitionToVersion.clear();
         if (FeConstants.runningUnitTest) {
             return;
         }
-        Env.getCurrentEnv().getEditLog().logExportUpdateState(id, ExportJobState.CANCELLED);
+        Env.getCurrentEnv().getEditLog().logExportUpdateState(this, ExportJobState.CANCELLED);
+        LOG.info("cancel export job {}", id);
     }
 
     private void exportExportJob() {
@@ -742,7 +751,13 @@ public class ExportJob implements Writable {
         setExportJobState(ExportJobState.FINISHED);
         finishTimeMs = System.currentTimeMillis();
         outfileInfo = GsonUtils.GSON.toJson(allOutfileInfo);
-        Env.getCurrentEnv().getEditLog().logExportUpdateState(id, ExportJobState.FINISHED);
+        // Clear the jobExecutorList to release memory.
+        jobExecutorList.clear();
+        selectStmtListPerParallel.clear();
+        allOutfileInfo.clear();
+        partitionToVersion.clear();
+        Env.getCurrentEnv().getEditLog().logExportUpdateState(this, ExportJobState.FINISHED);
+        LOG.info("finish export job {}", id);
     }
 
     public void replayExportJobState(ExportJobState newState) {

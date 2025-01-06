@@ -19,7 +19,7 @@
 
 #include "agent/be_exec_version_manager.h"
 #include "common/logging.h"
-#include "common/sync_point.h"
+#include "cpp/sync_point.h"
 #include "gutil/strings/split.h"
 #include "olap/wal/wal_manager.h"
 #include "runtime/runtime_state.h"
@@ -92,7 +92,7 @@ Status WalReader::get_next_block(Block* block, size_t* read_rows, bool* eof) {
                                          pos, src_block.columns());
         }
         vectorized::ColumnPtr column_ptr = src_block.get_by_position(pos).column;
-        if (column_ptr != nullptr && slot_desc->is_nullable()) {
+        if (!column_ptr && slot_desc->is_nullable()) {
             column_ptr = make_nullable(column_ptr);
         }
         dst_block.insert(index, vectorized::ColumnWithTypeAndName(

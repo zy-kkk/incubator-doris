@@ -45,9 +45,11 @@ import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.DataQualityException;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.DuplicatedRequestException;
+import org.apache.doris.common.InternalErrorCode;
 import org.apache.doris.common.LabelAlreadyUsedException;
 import org.apache.doris.common.LoadException;
 import org.apache.doris.common.MetaNotFoundException;
@@ -100,7 +102,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.DataInput;
-import java.io.DataOutput;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -117,25 +118,32 @@ import java.util.Set;
  * Step3: LoadLoadingChecker will check loading status periodically and commit transaction when push tasks are finished.
  * Step4: PublishVersionDaemon will send publish version tasks to be and finish transaction.
  */
+@Deprecated
 public class SparkLoadJob extends BulkLoadJob {
     private static final Logger LOG = LogManager.getLogger(SparkLoadJob.class);
 
     // --- members below need persist ---
     // create from resourceDesc when job created
+    @SerializedName(value = "sr")
     private SparkResource sparkResource;
     // members below updated when job state changed to etl
+    @SerializedName(value = "est")
     private long etlStartTimestamp = -1;
     // for spark yarn
+    @SerializedName(value = "appid")
     private String appId = "";
     // spark job outputPath
+    @SerializedName(value = "etlop")
     private String etlOutputPath = "";
     // members below updated when job state changed to loading
     // { tableId.partitionId.indexId.bucket.schemaHash -> (etlFilePath, etlFileSize) }
+    @SerializedName(value = "tm2fi")
     private Map<String, Pair<String, Long>> tabletMetaToFileInfo = Maps.newHashMap();
 
     // --- members below not persist ---
     private ResourceDesc resourceDesc;
     // for spark standalone
+    @SerializedName(value = "slah")
     private SparkLoadAppHandle sparkLoadAppHandle = new SparkLoadAppHandle();
     // for straggler wait long time to commit transaction
     private long quorumFinishTimestamp = -1;
@@ -651,21 +659,50 @@ public class SparkLoadJob extends BulkLoadJob {
     }
 
     private void tryCommitJob() throws UserException {
-        LOG.info(new LogBuilder(LogKey.LOAD_JOB, id).add("txn_id", transactionId)
-                .add("msg", "Load job try to commit txn").build());
-        Database db = getDb();
-        List<Table> tableList = db.getTablesOnIdOrderOrThrowException(
-                Lists.newArrayList(tableToLoadPartitions.keySet()));
-        MetaLockUtils.writeLockTablesOrMetaException(tableList);
-        try {
-            Env.getCurrentGlobalTransactionMgr().commitTransaction(
-                    dbId, tableList, transactionId, commitInfos,
-                    new LoadJobFinalOperation(id, loadingStatus, progress, loadStartTimestamp,
-                                              finishTimestamp, state, failMsg));
-        } catch (TabletQuorumFailedException e) {
-            // retry in next loop
-        } finally {
-            MetaLockUtils.writeUnlockTables(tableList);
+        int retryTimes = 0;
+        while (true) {
+            Database db = getDb();
+            List<Table> tableList = db.getTablesOnIdOrderOrThrowException(
+                    Lists.newArrayList(tableToLoadPartitions.keySet()));
+            if (Config.isCloudMode()) {
+                MetaLockUtils.commitLockTables(tableList);
+            } else {
+                MetaLockUtils.writeLockTablesOrMetaException(tableList);
+            }
+            try {
+                LOG.info(new LogBuilder(LogKey.LOAD_JOB, id).add("txn_id", transactionId)
+                        .add("msg", "Load job try to commit txn").build());
+                Env.getCurrentGlobalTransactionMgr().commitTransaction(
+                        dbId, tableList, transactionId, commitInfos,
+                        new LoadJobFinalOperation(id, loadingStatus, progress, loadStartTimestamp,
+                                finishTimestamp, state, failMsg));
+                return;
+            } catch (TabletQuorumFailedException e) {
+                // retry in next loop
+                return;
+            } catch (UserException e) {
+                LOG.warn(new LogBuilder(LogKey.LOAD_JOB, id)
+                        .add("txn_id", transactionId)
+                        .add("database_id", dbId)
+                        .add("retry_times", retryTimes)
+                        .add("error_msg", "Failed to commit txn with error:" + e.getMessage())
+                        .build(), e);
+                if (e.getErrorCode() == InternalErrorCode.DELETE_BITMAP_LOCK_ERR) {
+                    retryTimes++;
+                    if (retryTimes >= Config.mow_calculate_delete_bitmap_retry_times) {
+                        LOG.warn("cancelJob {} because up to max retry time, exception {}", id, e);
+                        throw e;
+                    }
+                } else {
+                    throw e;
+                }
+            } finally {
+                if (Config.isCloudMode()) {
+                    MetaLockUtils.commitUnlockTables(tableList);
+                } else {
+                    MetaLockUtils.writeUnlockTables(tableList);
+                }
+            }
         }
     }
 
@@ -779,22 +816,6 @@ public class SparkLoadJob extends BulkLoadJob {
                     file.delete();
                 }
             }
-        }
-    }
-
-    @Override
-    public void write(DataOutput out) throws IOException {
-        super.write(out);
-        sparkResource.write(out);
-        sparkLoadAppHandle.write(out);
-        out.writeLong(etlStartTimestamp);
-        Text.writeString(out, appId);
-        Text.writeString(out, etlOutputPath);
-        out.writeInt(tabletMetaToFileInfo.size());
-        for (Map.Entry<String, Pair<String, Long>> entry : tabletMetaToFileInfo.entrySet()) {
-            Text.writeString(out, entry.getKey());
-            Text.writeString(out, entry.getValue().first);
-            out.writeLong(entry.getValue().second);
         }
     }
 

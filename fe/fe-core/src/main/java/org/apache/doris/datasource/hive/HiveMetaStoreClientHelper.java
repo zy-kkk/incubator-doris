@@ -31,7 +31,6 @@ import org.apache.doris.analysis.NullLiteral;
 import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.analysis.StringLiteral;
 import org.apache.doris.catalog.ArrayType;
-import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.MapType;
 import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.catalog.ScalarType;
@@ -40,17 +39,16 @@ import org.apache.doris.catalog.StructType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.security.authentication.AuthenticationConfig;
-import org.apache.doris.common.security.authentication.HadoopUGI;
-import org.apache.doris.datasource.ExternalCatalog;
+import org.apache.doris.common.security.authentication.HadoopAuthenticator;
 import org.apache.doris.thrift.TExprOpcode;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.Maps;
 import org.apache.avro.Schema;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.HdfsConfiguration;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
+import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.ql.exec.FunctionRegistry;
 import org.apache.hadoop.hive.ql.parse.SemanticException;
 import org.apache.hadoop.hive.ql.plan.ExprNodeColumnDesc;
@@ -66,7 +64,7 @@ import org.apache.hudi.common.table.TableSchemaResolver;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.net.URI;
+import java.io.IOException;
 import java.security.PrivilegedExceptionAction;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -79,6 +77,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -92,6 +91,9 @@ public class HiveMetaStoreClientHelper {
     public static final String COMMENT = "comment";
 
     private static final Pattern digitPattern = Pattern.compile("(\\d+)");
+
+    public static final String HIVE_JSON_SERDE = "org.apache.hive.hcatalog.data.JsonSerDe";
+    public static final String LEGACY_HIVE_JSON_SERDE = "org.apache.hadoop.hive.serde2.JsonSerDe";
 
     public enum HiveFileFormat {
         TEXT_FILE(0, "text"),
@@ -800,9 +802,18 @@ public class HiveMetaStoreClientHelper {
     }
 
     public static Schema getHudiTableSchema(HMSExternalTable table) {
-        HoodieTableMetaClient metaClient = getHudiClient(table);
+        HoodieTableMetaClient metaClient = table.getHudiClient();
         TableSchemaResolver schemaUtil = new TableSchemaResolver(metaClient);
         Schema hudiSchema;
+
+        // Here, the timestamp should be reloaded again.
+        // Because when hudi obtains the schema in `getTableAvroSchema`, it needs to read the specified commit file,
+        // which is saved in the `metaClient`.
+        // But the `metaClient` is obtained from cache, so the file obtained may be an old file.
+        // This file may be deleted by hudi clean task, and an error will be reported.
+        // So, we should reload timeline so that we can read the latest commit files.
+        metaClient.reloadActiveTimeline();
+
         try {
             hudiSchema = HoodieAvroUtils.createHoodieWriteSchema(schemaUtil.getTableAvroSchema());
         } catch (Exception e) {
@@ -811,40 +822,61 @@ public class HiveMetaStoreClientHelper {
         return hudiSchema;
     }
 
-    public static <T> T ugiDoAs(long catalogId, PrivilegedExceptionAction<T> action) {
-        return ugiDoAs(((ExternalCatalog) Env.getCurrentEnv().getCatalogMgr().getCatalog(catalogId)).getConfiguration(),
-                action);
-    }
 
     public static <T> T ugiDoAs(Configuration conf, PrivilegedExceptionAction<T> action) {
         // if hive config is not ready, then use hadoop kerberos to login
-        AuthenticationConfig krbConfig = AuthenticationConfig.getKerberosConfig(conf,
-                AuthenticationConfig.HADOOP_KERBEROS_PRINCIPAL,
-                AuthenticationConfig.HADOOP_KERBEROS_KEYTAB);
-        return HadoopUGI.ugiDoAs(krbConfig, action);
-    }
-
-    public static HoodieTableMetaClient getHudiClient(HMSExternalTable table) {
-        String hudiBasePath = table.getRemoteTable().getSd().getLocation();
-        Configuration conf = getConfiguration(table);
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("try setting 'fs.xxx.impl.disable.cache' to true for hudi's base path: {}", hudiBasePath);
+        AuthenticationConfig authenticationConfig = AuthenticationConfig.getKerberosConfig(conf);
+        HadoopAuthenticator hadoopAuthenticator = HadoopAuthenticator.getHadoopAuthenticator(authenticationConfig);
+        try {
+            return hadoopAuthenticator.doAs(action);
+        } catch (IOException e) {
+            LOG.warn("HiveMetaStoreClientHelper ugiDoAs failed.", e);
+            throw new RuntimeException(e);
         }
-        URI hudiBasePathUri = URI.create(hudiBasePath);
-        String scheme = hudiBasePathUri.getScheme();
-        if (!Strings.isNullOrEmpty(scheme)) {
-            // Avoid using Cache in Hadoop FileSystem, which may cause FE OOM.
-            conf.set("fs." + scheme + ".impl.disable.cache", "true");
-        }
-        return HadoopUGI.ugiDoAs(AuthenticationConfig.getKerberosConfig(conf),
-                () -> HoodieTableMetaClient.builder().setConf(conf).setBasePath(hudiBasePath).build());
     }
 
     public static Configuration getConfiguration(HMSExternalTable table) {
-        Configuration conf = new HdfsConfiguration();
-        for (Map.Entry<String, String> entry : table.getHadoopProperties().entrySet()) {
-            conf.set(entry.getKey(), entry.getValue());
+        return table.getCatalog().getConfiguration();
+    }
+
+    public static Optional<String> getSerdeProperty(Table table, String key) {
+        String valueFromSd = table.getSd().getSerdeInfo().getParameters().get(key);
+        String valueFromTbl = table.getParameters().get(key);
+        return firstNonNullable(valueFromTbl, valueFromSd);
+    }
+
+    private static Optional<String> firstNonNullable(String... values) {
+        for (String value : values) {
+            if (!Strings.isNullOrEmpty(value)) {
+                return Optional.of(value);
+            }
         }
-        return conf;
+        return Optional.empty();
+    }
+
+    public static String firstPresentOrDefault(String defaultValue, Optional<String>... values) {
+        for (Optional<String> value : values) {
+            if (value.isPresent()) {
+                return value.get();
+            }
+        }
+        return defaultValue;
+    }
+
+    /**
+     * Return the byte value of the number string.
+     *
+     * @param altValue
+     *                 The string containing a number.
+     */
+    public static String getByte(String altValue) {
+        if (altValue != null && altValue.length() > 0) {
+            try {
+                return Character.toString((char) ((Byte.parseByte(altValue) + 256) % 256));
+            } catch (NumberFormatException e) {
+                return altValue.substring(0, 1);
+            }
+        }
+        return null;
     }
 }

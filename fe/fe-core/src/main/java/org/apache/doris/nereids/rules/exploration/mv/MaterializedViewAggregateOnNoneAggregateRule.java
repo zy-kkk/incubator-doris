@@ -105,7 +105,8 @@ public class MaterializedViewAggregateOnNoneAggregateRule extends AbstractMateri
 
     @Override
     protected Plan rewriteQueryByView(MatchMode matchMode, StructInfo queryStructInfo, StructInfo viewStructInfo,
-            SlotMapping viewToQuerySlotMapping, Plan tempRewritedPlan, MaterializationContext materializationContext) {
+            SlotMapping viewToQuerySlotMapping, Plan tempRewritedPlan, MaterializationContext materializationContext,
+            CascadesContext cascadesContext) {
         // check the expression used in group by and group out expression in query
         Pair<Plan, LogicalAggregate<Plan>> queryTopPlanAndAggPair = splitToTopPlanAndAggregate(queryStructInfo);
         if (queryTopPlanAndAggPair == null) {
@@ -123,7 +124,7 @@ public class MaterializedViewAggregateOnNoneAggregateRule extends AbstractMateri
                     () -> String.format("query aggregate = %s", queryAggregate.treeString()));
             return null;
         }
-        return doRewriteQueryByView(queryStructInfo,
+        return aggregateRewriteByView(queryStructInfo,
                 viewToQuerySlotMapping,
                 queryTopPlanAndAggPair,
                 tempRewritedPlan,

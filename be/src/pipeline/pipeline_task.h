@@ -41,7 +41,7 @@ class PipelineFragmentContext;
 
 namespace doris::pipeline {
 
-class TaskQueue;
+class MultiCoreTaskQueue;
 class PriorityTaskQueue;
 class Dependency;
 
@@ -61,7 +61,7 @@ public:
 
     // if the pipeline create a bunch of pipeline task
     // must be call after all pipeline task is finish to release resource
-    Status close(Status exec_status);
+    Status close(Status exec_status, bool close_sink = true);
 
     PipelineFragmentContext* fragment_context() { return _fragment_context; }
 
@@ -130,13 +130,15 @@ public:
 
     void wake_up();
 
-    DataSinkOperatorXPtr sink() const { return _sink; }
-
-    OperatorXPtr source() const { return _source; }
+    DataSinkOperatorPtr sink() const { return _sink; }
 
     int task_id() const { return _index; };
+    bool is_finalized() const { return _finalized; }
+
+    void set_wake_up_early() { _wake_up_early = true; }
 
     void clear_blocking_state() {
+        _state->get_query_ctx()->get_execution_dependency()->set_always_ready();
         // We use a lock to assure all dependencies are not deconstructed here.
         std::unique_lock<std::mutex> lc(_dependency_lock);
         if (!_finalized) {
@@ -158,8 +160,8 @@ public:
         }
     }
 
-    void set_task_queue(TaskQueue* task_queue);
-    TaskQueue* get_task_queue() { return _task_queue; }
+    void set_task_queue(MultiCoreTaskQueue* task_queue) { _task_queue = task_queue; }
+    MultiCoreTaskQueue* get_task_queue() { return _task_queue; }
 
     static constexpr auto THREAD_TIME_SLICE = 100'000'000ULL;
 
@@ -177,6 +179,12 @@ public:
     void set_core_id(int core_id) { this->_core_id = core_id; }
     int get_core_id() const { return this->_core_id; }
 
+    /**
+     * Return true if:
+     * 1. `enable_force_spill` is true which forces this task to spill data.
+     * 2. Or memory consumption reaches the high water mark of current workload group (80% of memory limitation by default) and revocable_mem_bytes is bigger than min_revocable_mem_bytes.
+     * 3. Or memory consumption is higher than the low water mark of current workload group (50% of memory limitation by default) and `query_weighted_consumption >= query_weighted_limit` and revocable memory is big enough.
+     */
     static bool should_revoke_memory(RuntimeState* state, int64_t revocable_mem_bytes);
 
     void put_in_runnable_queue() {
@@ -217,6 +225,8 @@ public:
 
     RuntimeState* runtime_state() const { return _state; }
 
+    RuntimeProfile* get_task_profile() const { return _task_profile.get(); }
+
     std::string task_name() const { return fmt::format("task{}({})", _index, _pipeline->_name); }
 
     void stop_if_finished() {
@@ -224,6 +234,10 @@ public:
             clear_blocking_state();
         }
     }
+
+    PipelineId pipeline_id() const { return _pipeline->id(); }
+
+    bool wake_up_early() const { return _wake_up_early; }
 
 private:
     friend class RuntimeFilterDependency;
@@ -244,7 +258,7 @@ private:
     uint32_t _schedule_time = 0;
     std::unique_ptr<doris::vectorized::Block> _block;
     PipelineFragmentContext* _fragment_context = nullptr;
-    TaskQueue* _task_queue = nullptr;
+    MultiCoreTaskQueue* _task_queue = nullptr;
 
     // used for priority queue
     // it may be visited by different thread but there is no race condition
@@ -276,10 +290,10 @@ private:
 
     MonotonicStopWatch _pipeline_task_watcher;
 
-    OperatorXs _operators; // left is _source, right is _root
-    OperatorXPtr _source;
-    OperatorXPtr _root;
-    DataSinkOperatorXPtr _sink;
+    Operators _operators; // left is _source, right is _root
+    OperatorXBase* _source;
+    OperatorXBase* _root;
+    DataSinkOperatorPtr _sink;
 
     // `_read_dependencies` is stored as same order as `_operators`
     std::vector<std::vector<Dependency*>> _read_dependencies;
@@ -300,11 +314,12 @@ private:
 
     Dependency* _execution_dep = nullptr;
 
-    std::atomic<bool> _finalized {false};
+    std::atomic<bool> _finalized = false;
     std::mutex _dependency_lock;
 
-    std::atomic<bool> _running {false};
-    std::atomic<bool> _eos {false};
+    std::atomic<bool> _running = false;
+    std::atomic<bool> _eos = false;
+    std::atomic<bool> _wake_up_early = false;
 };
 
 } // namespace doris::pipeline

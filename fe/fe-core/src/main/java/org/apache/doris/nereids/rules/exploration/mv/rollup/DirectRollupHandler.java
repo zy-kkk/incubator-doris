@@ -21,6 +21,7 @@ import org.apache.doris.common.Pair;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.functions.Function;
 import org.apache.doris.nereids.trees.expressions.functions.agg.AggregateFunction;
+import org.apache.doris.nereids.trees.expressions.functions.agg.NullableAggregateFunction;
 import org.apache.doris.nereids.trees.expressions.functions.agg.RollUpTrait;
 import org.apache.doris.nereids.trees.expressions.functions.combinator.Combinator;
 
@@ -47,10 +48,11 @@ public class DirectRollupHandler extends AggFunctionRollUpHandler {
                 mvExprToMvScanExprQueryBasedPair, mvExprToMvScanExprQueryBasedMap)) {
             return false;
         }
-        return queryAggregateFunctionShuttled.equals(viewExpression)
-                && MappingRollupHandler.AGGREGATE_ROLL_UP_EQUIVALENT_FUNCTION_MAP.keySet().stream()
-                .noneMatch(aggFunction -> aggFunction.equals(queryAggregateFunction))
-                && !(queryAggregateFunction instanceof Combinator);
+        boolean isEquals = queryAggregateFunctionShuttled instanceof NullableAggregateFunction
+                && viewExpression instanceof NullableAggregateFunction
+                ? ((NullableAggregateFunction) queryAggregateFunctionShuttled).equalsIgnoreNullable(viewExpression)
+                : queryAggregateFunctionShuttled.equals(viewExpression);
+        return isEquals && !(queryAggregateFunction instanceof Combinator);
     }
 
     @Override

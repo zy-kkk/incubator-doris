@@ -37,6 +37,7 @@ import org.apache.doris.datasource.maxcompute.MaxComputeExternalCatalog;
 import org.apache.doris.datasource.paimon.PaimonExternalCatalogFactory;
 import org.apache.doris.datasource.test.TestExternalCatalog;
 import org.apache.doris.datasource.trinoconnector.TrinoConnectorExternalCatalogFactory;
+import org.apache.doris.nereids.trees.plans.commands.CreateCatalogCommand;
 
 import com.google.common.base.Strings;
 import org.apache.logging.log4j.LogManager;
@@ -84,6 +85,15 @@ public class CatalogFactory {
     }
 
     /**
+     * create the catalog instance from CreateCatalogCommand.
+     */
+    public static CatalogIf createFromCommand(long catalogId, CreateCatalogCommand cmd)
+            throws DdlException {
+        return createCatalog(catalogId, cmd.getCatalogName(), cmd.getResource(),
+                cmd.getComment(), cmd.getProperties(), false);
+    }
+
+    /**
      * create the catalog instance from creating statement.
      */
     public static CatalogIf createFromStmt(long catalogId, CreateCatalogStmt stmt)
@@ -124,7 +134,7 @@ public class CatalogFactory {
                 catalog = new EsExternalCatalog(catalogId, name, resource, props, comment);
                 break;
             case "jdbc":
-                catalog = new JdbcExternalCatalog(catalogId, name, resource, props, comment, isReplay);
+                catalog = new JdbcExternalCatalog(catalogId, name, resource, props, comment);
                 break;
             case "iceberg":
                 catalog = IcebergExternalCatalogFactory.createCatalog(catalogId, name, resource, props, comment);
@@ -161,7 +171,7 @@ public class CatalogFactory {
             // If failed, it will throw exception and the catalog will not be created.
             try {
                 catalog.initAccessController(true);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 LOG.warn("Failed to init access controller", e);
                 throw new DdlException("Failed to init access controller: " + e.getMessage());
             }

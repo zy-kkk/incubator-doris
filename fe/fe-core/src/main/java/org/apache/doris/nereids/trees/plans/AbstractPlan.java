@@ -203,7 +203,7 @@ public abstract class AbstractPlan extends AbstractTreeNode<Plan> implements Pla
         } else {
             Supplier<List<Slot>> outputSupplier = Suppliers.memoize(this::computeOutput);
             Supplier<DataTrait> fdSupplier = () -> this instanceof LogicalPlan
-                    ? ((LogicalPlan) this).computeFuncDeps()
+                    ? ((LogicalPlan) this).computeDataTrait()
                     : DataTrait.EMPTY_TRAIT;
             return new LogicalProperties(outputSupplier, fdSupplier);
         }
@@ -225,5 +225,9 @@ public abstract class AbstractPlan extends AbstractTreeNode<Plan> implements Pla
             parent = ((Plan) parent.get()).getMutableState(MutableState.KEY_PARENT);
         }
         return ancestors;
+    }
+
+    public void updateActualRowCount(long actualRowCount) {
+        statistics.setActualRowCount(actualRowCount);
     }
 }

@@ -17,9 +17,11 @@
 
 package org.apache.doris.nereids.trees.plans.commands;
 
+import org.apache.doris.analysis.StmtType;
 import org.apache.doris.mysql.MysqlCommand;
 import org.apache.doris.nereids.trees.expressions.Placeholder;
 import org.apache.doris.nereids.trees.plans.PlanType;
+import org.apache.doris.nereids.trees.plans.commands.insert.InsertIntoTableCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.visitor.PlanVisitor;
 import org.apache.doris.qe.ConnectContext;
@@ -37,7 +39,7 @@ import java.util.List;
  * Prepared Statement
  */
 public class PrepareCommand extends Command {
-    private static final Logger LOG = LogManager.getLogger(StmtExecutor.class);
+    private static final Logger LOG = LogManager.getLogger(PrepareCommand.class);
 
     private final List<Placeholder> placeholders = new ArrayList<>();
     private final LogicalPlan logicalPlan;
@@ -102,6 +104,10 @@ public class PrepareCommand extends Command {
             LOG.debug("add prepared statement {}, isBinaryProtocol {}",
                     name, ctx.getCommand() == MysqlCommand.COM_STMT_PREPARE);
         }
+        if (logicalPlan instanceof InsertIntoTableCommand
+                    && ((InsertIntoTableCommand) logicalPlan).getLabelName().isPresent()) {
+            throw new org.apache.doris.common.UserException("Only support prepare InsertStmt without label now");
+        }
         ctx.addPreparedStatementContext(name,
                 new PreparedStatementContext(this, ctx, ctx.getStatementContext(), name));
         if (ctx.getCommand() == MysqlCommand.COM_STMT_PREPARE) {
@@ -116,5 +122,10 @@ public class PrepareCommand extends Command {
 
     public PrepareCommand withPlaceholders(List<Placeholder> placeholders) {
         return new PrepareCommand(this.name, this.logicalPlan, placeholders, this.originalStmt);
+    }
+
+    @Override
+    public StmtType stmtType() {
+        return StmtType.PREPARE;
     }
 }

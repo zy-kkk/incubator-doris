@@ -129,9 +129,9 @@ public class PartitionDesc {
                                     + expr.toSql());
                 }
             } else if (expr instanceof SlotRef) {
-                if (isAutoPartition && !colNames.isEmpty() && !isListPartition) {
+                if (isAutoPartition && !isListPartition) {
                     throw new AnalysisException(
-                            "auto create partition only support one slotRef in expr of RANGE partition. "
+                            "auto create partition only support date_trunc function of RANGE partition. "
                                     + expr.toSql());
                 }
                 colNames.add(((SlotRef) expr).getColumnName());
@@ -284,5 +284,9 @@ public class PartitionDesc {
     public PartitionInfo toPartitionInfo(List<Column> schema, Map<String, Long> partitionNameToId, boolean isTemp)
             throws DdlException, AnalysisException {
         throw new NotImplementedException("toPartitionInfo not implemented");
+    }
+
+    public boolean inIdentifierPartitions(String colName) {
+        return partitionColNames != null && partitionColNames.contains(colName);
     }
 }

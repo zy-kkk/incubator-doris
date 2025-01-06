@@ -32,7 +32,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
 import com.google.common.collect.ImmutableMap;
 import org.apache.commons.lang3.NotImplementedException;
-import org.apache.hadoop.hive.common.ValidWriteIdList;
 import org.apache.hadoop.hive.metastore.IMetaStoreClient.NotificationFilter;
 import org.apache.hadoop.hive.metastore.api.ColumnStatisticsObj;
 import org.apache.hadoop.hive.metastore.api.CurrentNotificationEventId;
@@ -523,7 +522,7 @@ public class PostgreSQLJdbcHMSCachedClient extends JdbcHMSCachedClient {
     }
 
     @Override
-    public ValidWriteIdList getValidWriteIds(String fullTableName, long currentTransactionId) {
+    public Map<String, String> getValidWriteIds(String fullTableName, long currentTransactionId) {
         throw new HMSClientException("Do not support in PostgreSQLJdbcHMSCachedClient.");
     }
 
@@ -544,6 +543,10 @@ public class PostgreSQLJdbcHMSCachedClient extends JdbcHMSCachedClient {
 
     public void dropDatabase(String dbName) {
         throw new NotImplementedException("PostgreSQL dropDatabase not implemented");
+    }
+
+    public void truncateTable(String dbName, String tblName, List<String> partitions) {
+        throw new NotImplementedException("PostgreSQL truncateTable not implemented");
     }
 
     public void createTable(TableMetadata hiveTable, boolean ignoreIfExists) {

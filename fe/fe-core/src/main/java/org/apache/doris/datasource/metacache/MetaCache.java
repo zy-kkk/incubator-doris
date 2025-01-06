@@ -18,7 +18,7 @@
 package org.apache.doris.datasource.metacache;
 
 import org.apache.doris.common.CacheFactory;
-import org.apache.doris.common.util.Util;
+import org.apache.doris.common.Pair;
 
 import com.github.benmanes.caffeine.cache.CacheLoader;
 import com.github.benmanes.caffeine.cache.LoadingCache;
@@ -28,12 +28,15 @@ import com.google.common.collect.Maps;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
 
 public class MetaCache<T> {
-    private LoadingCache<String, List<String>> namesCache;
+    private LoadingCache<String, List<Pair<String, String>>> namesCache;
+    //Pair<String, String> : <Remote name, Local name>
     private Map<Long, String> idToName = Maps.newConcurrentMap();
     private LoadingCache<String, Optional<T>> metaObjCache;
 
@@ -44,7 +47,7 @@ public class MetaCache<T> {
             OptionalLong expireAfterWriteSec,
             OptionalLong refreshAfterWriteSec,
             long maxSize,
-            CacheLoader<String, List<String>> namesCacheLoader,
+            CacheLoader<String, List<Pair<String, String>>> namesCacheLoader,
             CacheLoader<String, Optional<T>> metaObjCacheLoader,
             RemovalListener<String, Optional<T>> removalListener) {
         this.name = name;
@@ -58,7 +61,7 @@ public class MetaCache<T> {
         CacheFactory namesCacheFactory = new CacheFactory(
                 expireAfterWriteSec,
                 refreshAfterWriteSec,
-                maxSize,
+                1, // names cache has one and only one entry
                 true,
                 null);
         CacheFactory objCacheFactory = new CacheFactory(
@@ -72,15 +75,23 @@ public class MetaCache<T> {
     }
 
     public List<String> listNames() {
-        return namesCache.get("");
+        return Objects.requireNonNull(namesCache.get("")).stream().map(Pair::value).collect(Collectors.toList());
     }
 
-    public Optional<T> getMetaObj(String name) {
+    public String getRemoteName(String localName) {
+        return Objects.requireNonNull(namesCache.getIfPresent("")).stream()
+                .filter(pair -> pair.value().equals(localName))
+                .map(Pair::key)
+                .findFirst()
+                .orElse(null);
+    }
+
+    public Optional<T> getMetaObj(String name, long id) {
         Optional<T> val = metaObjCache.getIfPresent(name);
         if (val == null) {
             synchronized (metaObjCache) {
                 val = metaObjCache.get(name);
-                idToName.put(Util.genTableIdByName(name), name);
+                idToName.put(id, name);
             }
         }
         return val;
@@ -88,36 +99,38 @@ public class MetaCache<T> {
 
     public Optional<T> getMetaObjById(long id) {
         String name = idToName.get(id);
-        return name == null ? Optional.empty() : getMetaObj(name);
+        return name == null ? Optional.empty() : getMetaObj(name, id);
     }
 
-    public void updateCache(String objName, T obj) {
-        metaObjCache.put(objName, Optional.of(obj));
+    public void updateCache(String remoteName, String localName, T obj, long id) {
+        metaObjCache.put(localName, Optional.of(obj));
         namesCache.asMap().compute("", (k, v) -> {
             if (v == null) {
-                return Lists.newArrayList(objName);
+                return Lists.newArrayList(Pair.of(remoteName, localName));
             } else {
-                v.add(objName);
+                v.add(Pair.of(remoteName, localName));
                 return v;
             }
         });
+        idToName.put(id, localName);
     }
 
-    public void invalidate(String objName) {
+    public void invalidate(String localName, long id) {
         namesCache.asMap().compute("", (k, v) -> {
             if (v == null) {
                 return Lists.newArrayList();
             } else {
-                v.remove(objName);
+                v.removeIf(pair -> pair.value().equals(localName));
                 return v;
             }
         });
-        metaObjCache.invalidate(objName);
+        metaObjCache.invalidate(localName);
+        idToName.remove(id);
     }
 
     public void invalidateAll() {
         namesCache.invalidateAll();
         metaObjCache.invalidateAll();
+        idToName.clear();
     }
-
 }

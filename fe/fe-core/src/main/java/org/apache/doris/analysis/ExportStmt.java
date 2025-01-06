@@ -24,7 +24,6 @@ import org.apache.doris.catalog.Partition;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
-import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.FeNameFormat;
@@ -48,9 +47,9 @@ import lombok.Getter;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 // EXPORT statement, export data to dirs by broker.
 //
@@ -60,10 +59,11 @@ import java.util.stream.Collectors;
 //          [PROPERTIES("key"="value")]
 //          WITH BROKER 'broker_name' [( $broker_attrs)]
 @Getter
-public class ExportStmt extends StatementBase {
+public class ExportStmt extends StatementBase implements NotFallbackInParser {
     public static final String PARALLELISM = "parallelism";
     public static final String LABEL = "label";
     public static final String DATA_CONSISTENCY = "data_consistency";
+    public static final String COMPRESS_TYPE = "compress_type";
 
     private static final String DEFAULT_COLUMN_SEPARATOR = "\t";
     private static final String DEFAULT_LINE_DELIMITER = "\n";
@@ -81,6 +81,7 @@ public class ExportStmt extends StatementBase {
             .add(PropertyAnalyzer.PROPERTIES_LINE_DELIMITER)
             .add(PropertyAnalyzer.PROPERTIES_TIMEOUT)
             .add("format")
+            .add(COMPRESS_TYPE)
             .build();
 
     private TableName tblName;
@@ -107,6 +108,7 @@ public class ExportStmt extends StatementBase {
     private String deleteExistingFiles;
     private String withBom;
     private String dataConsistency = ExportJob.CONSISTENT_PARTITION;
+    private String compressionType;
     private SessionVariable sessionVariables;
 
     private String qualifiedUser;
@@ -144,6 +146,11 @@ public class ExportStmt extends StatementBase {
     @Override
     public void analyze(Analyzer analyzer) throws UserException {
         super.analyze(analyzer);
+
+        if (!Config.enable_outfile_to_local && Objects.requireNonNull(path)
+                .startsWith(OutFileClause.LOCAL_FILE_PREFIX)) {
+            throw new AnalysisException("`enable_outfile_to_local` = false, exporting file to local fs is disabled.");
+        }
 
         tableRef = analyzer.resolveTableRef(tableRef);
         Preconditions.checkNotNull(tableRef);
@@ -205,7 +212,7 @@ public class ExportStmt extends StatementBase {
     }
 
     private void setJob() throws UserException {
-        exportJob = new ExportJob();
+        exportJob = new ExportJob(Env.getCurrentEnv().getNextId());
 
         Database db = Env.getCurrentInternalCatalog().getDbOrDdlException(this.tblName.getDb());
         exportJob.setDbId(db.getId());
@@ -234,6 +241,7 @@ public class ExportStmt extends StatementBase {
         exportJob.setDeleteExistingFiles(this.deleteExistingFiles);
         exportJob.setWithBom(this.withBom);
         exportJob.setDataConsistency(this.dataConsistency);
+        exportJob.setCompressType(this.compressionType);
 
         if (columns != null) {
             Splitter split = Splitter.on(',').trimResults().omitEmptyStrings();
@@ -323,11 +331,6 @@ public class ExportStmt extends StatementBase {
         // "" means user specified zero columns
         this.columns = properties.getOrDefault(LoadStmt.KEY_IN_PARAM_COLUMNS, null);
 
-        // check columns are exits
-        if (columns != null) {
-            checkColumns();
-        }
-
         // format
         this.format = properties.getOrDefault(LoadStmt.KEY_IN_PARAM_FORMAT_TYPE, "csv").toLowerCase();
 
@@ -376,24 +379,9 @@ public class ExportStmt extends StatementBase {
                         + ExportJob.CONSISTENT_PARTITION + "`/`" + ExportJob.CONSISTENT_NONE + "`");
             }
         }
-    }
 
-    private void checkColumns() throws DdlException {
-        if (this.columns.isEmpty()) {
-            throw new DdlException("columns can not be empty");
-        }
-        Database db = Env.getCurrentInternalCatalog().getDbOrDdlException(this.tblName.getDb());
-        Table table = db.getTableOrDdlException(this.tblName.getTbl());
-        List<String> tableColumns = table.getBaseSchema().stream().map(column -> column.getName())
-                .collect(Collectors.toList());
-        Splitter split = Splitter.on(',').trimResults().omitEmptyStrings();
-
-        List<String> columnsSpecified = split.splitToList(this.columns.toLowerCase());
-        for (String columnName : columnsSpecified) {
-            if (!tableColumns.contains(columnName)) {
-                throw new DdlException("unknown column [" + columnName + "] in table [" + this.tblName.getTbl() + "]");
-            }
-        }
+        // compress_type
+        this.compressionType = properties.getOrDefault(COMPRESS_TYPE, "");
     }
 
     @Override
@@ -439,5 +427,10 @@ public class ExportStmt extends StatementBase {
     @Override
     public String toString() {
         return toSql();
+    }
+
+    @Override
+    public StmtType stmtType() {
+        return StmtType.EXPORT;
     }
 }

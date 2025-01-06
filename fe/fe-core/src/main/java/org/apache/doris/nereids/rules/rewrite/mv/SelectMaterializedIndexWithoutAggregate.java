@@ -64,6 +64,9 @@ public class SelectMaterializedIndexWithoutAggregate extends AbstractSelectMater
                 // Project(Filter(Scan))
                 logicalProject(logicalFilter(logicalOlapScan().when(this::shouldSelectIndexWithoutAgg)))
                         .thenApplyNoThrow(ctx -> {
+                            if (ctx.connectContext.getSessionVariable().isEnableSyncMvCostBasedRewrite()) {
+                                return ctx.root;
+                            }
                             LogicalProject<LogicalFilter<LogicalOlapScan>> project = ctx.root;
                             LogicalFilter<LogicalOlapScan> filter = project.child();
                             LogicalOlapScan scan = filter.child();
@@ -86,6 +89,9 @@ public class SelectMaterializedIndexWithoutAggregate extends AbstractSelectMater
                 // Filter(Project(Scan))
                 logicalFilter(logicalProject(logicalOlapScan().when(this::shouldSelectIndexWithoutAgg)))
                         .thenApplyNoThrow(ctx -> {
+                            if (ctx.connectContext.getSessionVariable().isEnableSyncMvCostBasedRewrite()) {
+                                return ctx.root;
+                            }
                             LogicalFilter<LogicalProject<LogicalOlapScan>> filter = ctx.root;
                             LogicalProject<LogicalOlapScan> project = filter.child();
                             LogicalOlapScan scan = project.child();
@@ -105,6 +111,9 @@ public class SelectMaterializedIndexWithoutAggregate extends AbstractSelectMater
                 // Filter(Scan)
                 logicalFilter(logicalOlapScan().when(this::shouldSelectIndexWithoutAgg))
                         .thenApplyNoThrow(ctx -> {
+                            if (ctx.connectContext.getSessionVariable().isEnableSyncMvCostBasedRewrite()) {
+                                return ctx.root;
+                            }
                             LogicalFilter<LogicalOlapScan> filter = ctx.root;
                             LogicalOlapScan scan = filter.child();
                             LogicalOlapScan mvPlan = select(
@@ -126,6 +135,9 @@ public class SelectMaterializedIndexWithoutAggregate extends AbstractSelectMater
                 // Project(Scan)
                 logicalProject(logicalOlapScan().when(this::shouldSelectIndexWithoutAgg))
                         .thenApplyNoThrow(ctx -> {
+                            if (ctx.connectContext.getSessionVariable().isEnableSyncMvCostBasedRewrite()) {
+                                return ctx.root;
+                            }
                             LogicalProject<LogicalOlapScan> project = ctx.root;
                             LogicalOlapScan scan = project.child();
 
@@ -146,6 +158,9 @@ public class SelectMaterializedIndexWithoutAggregate extends AbstractSelectMater
                 logicalOlapScan()
                         .when(this::shouldSelectIndexWithoutAgg)
                         .thenApplyNoThrow(ctx -> {
+                            if (ctx.connectContext.getSessionVariable().isEnableSyncMvCostBasedRewrite()) {
+                                return ctx.root;
+                            }
                             LogicalOlapScan scan = ctx.root;
 
                             LogicalOlapScan mvPlan = select(
@@ -219,6 +234,7 @@ public class SelectMaterializedIndexWithoutAggregate extends AbstractSelectMater
             // So only base index and indexes that have all the keys could be used.
             List<MaterializedIndex> candidates = table.getVisibleIndex().stream()
                     .filter(index -> table.getKeyColumnsByIndexId(index.getId()).size() == baseIndexKeySize)
+                    .filter(index -> containAllKeyColumns(table, index))
                     .filter(index -> containAllRequiredColumns(index, scan, requiredScanOutputSupplier.get(),
                             requiredExpr.get(), predicatesSupplier.get()))
                     .collect(Collectors.toList());

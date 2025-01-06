@@ -19,7 +19,6 @@ package org.apache.doris.statistics;
 
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Env;
-import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.Pair;
@@ -105,10 +104,11 @@ public class HMSAnalysisTask extends ExternalAnalysisTask {
         for (String names : partitionNames) {
             // names is like "date=20230101" for one level partition
             // and like "date=20230101/hour=12" for two level partition
-            String[] parts = names.split("/");
-            for (String part : parts) {
-                if (part.startsWith(col.getName())) {
-                    String value = HiveUtil.getHivePartitionValue(part);
+            List<String[]> parts = HiveUtil.toPartitionColNameAndValues(names);
+            for (String[] part : parts) {
+                String colName = part[0];
+                String value = part[1];
+                if (colName != null && colName.equals(col.getName())) {
                     // HIVE_DEFAULT_PARTITION hive partition value when the partition name is not specified.
                     if (value == null || value.isEmpty() || value.equals(HiveMetaStoreCache.HIVE_DEFAULT_PARTITION)) {
                         numNulls += 1;
@@ -250,11 +250,8 @@ public class HMSAnalysisTask extends ExternalAnalysisTask {
             params.put("ndvFunction", "ROUND(NDV(`${colName}`) * ${scaleFactor})");
             params.put("rowCount", "ROUND(count(1) * ${scaleFactor})");
         } else {
-            if (col.getType().isStringType()) {
-                sb.append(DUJ1_ANALYZE_STRING_TEMPLATE);
-            } else {
-                sb.append(DUJ1_ANALYZE_TEMPLATE);
-            }
+            sb.append(DUJ1_ANALYZE_TEMPLATE);
+            params.put("subStringColName", getStringTypeColName(col));
             params.put("dataSizeFunction", getDataSizeFunction(col, true));
             params.put("ndvFunction", getNdvFunction("ROUND(SUM(t1.count) * ${scaleFactor})"));
             params.put("rowCount", "ROUND(SUM(t1.count) * ${scaleFactor})");
@@ -282,8 +279,7 @@ public class HMSAnalysisTask extends ExternalAnalysisTask {
         if (tableStats == null) {
             return;
         }
-        OlapTable table = (OlapTable) tbl;
-        String indexName = info.indexId == -1 ? table.getName() : table.getIndexNameById(info.indexId);
+        String indexName = table.getName();
         ColStatsMeta columnStats = tableStats.findColumnStatsMeta(indexName, info.colName);
         if (columnStats == null) {
             return;
