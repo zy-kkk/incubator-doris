@@ -135,6 +135,7 @@ Status JdbcConnector::open(RuntimeState* state, bool read) {
         ctor_params.__set_jdbc_password(_conn_param.passwd);
         ctor_params.__set_jdbc_driver_class(_conn_param.driver_class);
         ctor_params.__set_driver_path(driver_path);
+        ctor_params.__set_jdbc_driver_checksum(_conn_param.driver_checksum);
         if (state == nullptr) {
             ctor_params.__set_batch_size(read ? 1 : 0);
         } else {
